@@ -67,5 +67,9 @@ class Agent:
         self._context_cleared : bool=False
 
         #思考模式
-        self._thinking_mode = self._
+        self._thinking_mode = self._resolve_thinking_mode()
         self.api_base = api_base
+
+
+
+
