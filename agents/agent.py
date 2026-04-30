@@ -5,10 +5,12 @@ import asyncio
 import uuid
 import time
 from pathlib import Path
+from pyexpat.errors import messages
 from typing import Callable, Awaitable, Any
 
 from agents.mcp_client import McpManager
 from agents.prompt import build_system_prompt, build_plan_mode_prompt
+from agents.session import save_session
 from agents.tools import ToolDef, tool_definitions
 
 import openai
@@ -317,8 +319,111 @@ class Agent:
             return {"exceeded": True, "reason": f"Turn limit reached ({self.current_turns} >= {self.max_turns})"}
         return {"exceeded": False}
 
+    #压缩会话
+    async def compact(self)->None:
+        await self._compact_conversation()
 
+    # 会话
+    #恢复会话信息
+    def restore_session(self, data:dict)->None:
+        if data.get("anthropicMessages"):
+            self._anthropic_messages = data["anthropicMessages"]
+        if data.get("openaiMessages"):
+            self._openai_messages = data["openaiMessages"]
+        print_info(f"Session restored ({self._get_message_count()} messages).")
 
+    def _get_message_count(self) -> int:
+        return len(self._openai_messages) if self.use_openai else len(self._anthropic_messages)
+
+    def _auto_save(self) -> None:
+        try:
+            save_session(self.session_id, {
+                "metadata": {
+                    "id": self.session_id,
+                    "model": self.model,
+                    "cwd": str(Path.cwd()),
+                    "startTime": self.session_start_time,
+                    "messageCount": self._get_message_count(),
+                },
+                "anthropicMessages": self._anthropic_messages if not self.use_openai else None,
+                "openaiMessages": self._openai_messages if self.use_openai else None,
+            })
+        except Exception:
+            pass
+
+    #自动压缩
+    async def _check_and_compact(self)->None:
+        if self.last_input_tokens>self.effective_windos*0.85:
+            print_info("Context window filling up, compacting conversation...")
+            await self._compact_conversation()
+
+    async def _compact_conversation(self)->None:
+        if self.use_openai:
+            await self._compact_openai()
+        else:
+            await self._compact_anthropic()
+        print_info("Conversation compacted.")
+
+    async def _compact_anthropic(self)->None:
+        if len (self._anthropic_messages)<4:
+            return
+
+        last_user_msg = self._anthropic_messages[-1]
+        summary_resp = await self._anthropic_client.messages.create(
+            model=self.model,
+            max_tokens=2048,
+            system ="You are a conversation summarizer. Be concise but preserve important details.",
+            messages=[
+                *self._anthropic_messages[:-1],
+                {"role":"user",
+                 "content":"Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work."
+                }
+            ],
+        )
+        summary_text = summary_resp.content[0].text if summary_resp.content and  summary_resp.content[0].type == "text" else "No summary available."
+        self._anthropic_messages=[
+            {"role":"user","content":f"[Previous conversation summary]\n{summary_text}"},
+            {"role": "assistant", "content": "Understood. I have the context from our previous conversation. How can I continue helping?"},
+        ]
+        if last_user_msg.get("role") == "user":
+            self._anthropic_messages.append(last_user_msg)
+        self.last_input_tokens=0
+
+    async def _compact_openai(self)->None:
+        if len (self._openai_messages)<4:
+            return
+        system_msg = self._openai_messages[0]
+        last_user_msg = self._openai_messages[-1]
+        summary_resp = await self._openai_client.completions.create(
+            model=self.model,
+            messages =[
+                {"role": "system", "content": "You are a conversation summarizer. Be concise but preserve important details."},
+                *self._openai_messages[1:-1],
+                {"role": "user","content": "Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work."},
+
+            ],
+        )
+        summary_text = summary_resp.choices[0].text if summary_resp.choices and summary_resp.choices[0].type == "text" else ""
+        self._openai_messages=[
+            system_msg,
+            {"role": "user", "content": f"[Previous conversation summary]\n{summary_text}"},
+            {"role": "assistant","content": "Understood. I have the context from our previous conversation. How can I continue helping?"},
+        ]
+        if last_user_msg.get("role") == "user":
+            self._openai_messages.append(last_user_msg)
+        self.last_input_token_count=0
+    #多层级压缩流水线
+
+    def _run_compression_pipeline(self)->None:
+        if self.use_openai:
+            self._budget_tool_results_openai()
+            self._snip_stale_results_openai()
+            self._microcompact_openai()
+        else:
+            self._budget_tool_results_anthropic()
+            self._snip_stale_results_anthropic()
+            self._microcompact_anthropic()
+    #
 
 
 
