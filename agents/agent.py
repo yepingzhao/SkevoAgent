@@ -613,5 +613,7 @@ class Agent:
 
     #
     async def _execute_skill_tool(self, inp: dict) -> str:
+        from .skills import execute_skill
+
 
 
