@@ -58,7 +58,8 @@ BearAgent/
 │   └── skill-evolution/           # Skills 自进化审计产物
 ├── wiki/                          # 项目文档中心
 ├── Dockerfile
-├── requirements.txt
+├── pyproject.toml               # 项目元数据、依赖和 bear-code 命令入口
+├── uv.lock                      # 本地与 Docker 共用的锁文件
 └── README.md
 ```
 
@@ -74,13 +75,13 @@ BearAgent/
 - ripgrep，可选但推荐
 - 一个 OpenAI-compatible 或 Anthropic-compatible 模型接口
 
-安装依赖：
+先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，然后同步项目环境：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
+
+`uv` 会在项目内创建 `.venv`，并根据 `pyproject.toml` 与 `uv.lock` 同步 Bear Code 和运行依赖，无需手动激活虚拟环境。如果项目元数据发生变化，普通的 `uv sync` 会更新 `uv.lock`；需要验证锁文件不发生变化时，请使用 `uv sync --locked`。
 
 ### 2. 配置 `.env`
 
@@ -119,7 +120,13 @@ MODEL=deepseek-chat
 ### 3. 启动 REPL
 
 ```bash
-python3 -m agents.main
+uv run bear-code
+```
+
+如需直接使用模块入口，仍可运行：
+
+```bash
+uv run python -m agents.main
 ```
 
 启动后直接输入任务，例如：
@@ -131,7 +138,7 @@ python3 -m agents.main
 ### 4. 执行一次性任务
 
 ```bash
-python3 -m agents.main "总结这个项目的目录结构和核心模块"
+uv run bear-code "总结这个项目的目录结构和核心模块"
 ```
 
 ### 5. 使用 Plan Mode
@@ -139,7 +146,7 @@ python3 -m agents.main "总结这个项目的目录结构和核心模块"
 Plan Mode 适合重构、复杂修复和多文件修改。它会先只读分析和写计划，用户审批后再执行。
 
 ```bash
-python3 -m agents.main --plan "分析 Skills 检索逻辑应该如何优化"
+uv run bear-code --plan "分析 Skills 检索逻辑应该如何优化"
 ```
 
 REPL 中也可以输入：
@@ -151,8 +158,33 @@ REPL 中也可以输入：
 ### 6. 恢复最近会话
 
 ```bash
-python3 -m agents.main --resume
+uv run bear-code --resume
 ```
+
+## 依赖管理
+
+验证锁文件与项目声明一致，并严格按锁文件同步：
+
+```bash
+uv lock --check
+uv sync --locked
+```
+
+新增或删除直接依赖。请将示例中的 `httpx` 替换为需要管理的依赖：
+
+```bash
+uv add httpx
+uv remove httpx
+```
+
+升级锁定依赖：
+
+```bash
+uv lock --upgrade
+uv sync
+```
+
+`pyproject.toml` 和提交到 Git 的 `uv.lock` 是项目唯一的依赖来源，不再维护 `requirements.txt`。
 
 ## 如何让项目自动沉淀并进化 Skills
 
@@ -192,13 +224,13 @@ user:    ~/.bear/skills/<skill_name>/SKILL.md
 ```bash
 BEAR_AUTO_SKILL_EVOLUTION=1 \
 BEAR_AUTO_SKILL_TARGET=project \
-python3 -m agents.main --accept-edits
+uv run bear-code --accept-edits
 ```
 
 也可以使用更激进的模式：
 
 ```bash
-python3 -m agents.main --yolo
+uv run bear-code --yolo
 ```
 
 不建议长期默认使用 `--yolo`，因为它会跳过确认。日常推荐 `--accept-edits`，既能让后台 Skill 写入正常发生，又不会绕过所有权限判断。
@@ -398,6 +430,8 @@ mcp__<serverName>__<toolName>
 ```bash
 docker build -t bear-code .
 ```
+
+镜像构建使用项目提交的 `uv.lock` 执行 `uv sync --locked --no-dev`；如果锁文件与 `pyproject.toml` 不一致，构建会直接失败。
 
 启动交互式会话：
 
