@@ -1,9 +1,14 @@
+FROM ghcr.io/astral-sh/uv:0.10.9 AS uv
 FROM python:3.11-slim
+
+COPY --from=uv /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -32,15 +37,14 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project
 COPY agents ./agents
-COPY README.md .
+RUN uv sync --locked --no-dev
 
 RUN mkdir -p /workspace
 COPY .mcp.json /workspace/.mcp.json
 
 WORKDIR /workspace
 
-ENTRYPOINT ["python", "-m", "agents.main"]
+ENTRYPOINT ["/app/.venv/bin/bear-code"]
