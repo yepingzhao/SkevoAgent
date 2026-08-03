@@ -77,6 +77,74 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
             {"recommendations": ["ms-python.python", "ms-python.debugpy"]},
         )
 
+    def test_launch_profiles_debug_python_modules_directly(self) -> None:
+        launch = load_vscode_json("launch.json")
+        configurations = launch["configurations"]
+
+        self.assertEqual(launch["version"], "0.2.0")
+        self.assertEqual(
+            [configuration["name"] for configuration in configurations],
+            [
+                "Bear Code: Interactive REPL",
+                "Bear Code: One-shot Prompt",
+                "Bear Code: Plan Mode",
+                "Tests: Current File",
+                "Tests: All",
+            ],
+        )
+
+        for configuration in configurations:
+            self.assertEqual(configuration["type"], "debugpy")
+            self.assertEqual(configuration["request"], "launch")
+            self.assertEqual(configuration["cwd"], "${workspaceFolder}")
+            self.assertEqual(configuration["console"], "integratedTerminal")
+            self.assertTrue(configuration["justMyCode"])
+            self.assertNotIn("program", configuration)
+            self.assertNotIn("python", configuration)
+
+        for configuration in configurations[:3]:
+            self.assertEqual(configuration["module"], "agents.main")
+            self.assertEqual(configuration["envFile"], "${workspaceFolder}/.env")
+
+        self.assertNotIn("args", configurations[0])
+        self.assertEqual(configurations[1]["args"], ["${input:bearCodePrompt}"])
+        self.assertEqual(
+            configurations[2]["args"],
+            ["--plan", "${input:bearCodePlanPrompt}"],
+        )
+
+        self.assertEqual(configurations[3]["module"], "unittest")
+        self.assertEqual(configurations[3]["args"], ["-v", "${relativeFile}"])
+        self.assertNotIn("envFile", configurations[3])
+
+        self.assertEqual(configurations[4]["module"], "unittest")
+        self.assertEqual(
+            configurations[4]["args"],
+            ["discover", "-s", "tests", "-p", "test_*.py", "-v"],
+        )
+        self.assertNotIn("envFile", configurations[4])
+
+    def test_launch_prompt_inputs_are_non_secret_and_replaceable(self) -> None:
+        launch = load_vscode_json("launch.json")
+
+        self.assertEqual(
+            launch["inputs"],
+            [
+                {
+                    "id": "bearCodePrompt",
+                    "type": "promptString",
+                    "description": "Prompt to run once",
+                    "default": "Summarize this project",
+                },
+                {
+                    "id": "bearCodePlanPrompt",
+                    "type": "promptString",
+                    "description": "Prompt to analyze in Plan Mode",
+                    "default": "Analyze how to improve this project",
+                },
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
