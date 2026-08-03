@@ -101,6 +101,7 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
             self.assertTrue(configuration["justMyCode"])
             self.assertNotIn("program", configuration)
             self.assertNotIn("python", configuration)
+            self.assertNotIn("env", configuration)
 
         for configuration in configurations[:3]:
             self.assertEqual(configuration["module"], "agents.main")
@@ -115,14 +116,14 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
 
         self.assertEqual(configurations[3]["module"], "unittest")
         self.assertEqual(configurations[3]["args"], ["-v", "${relativeFile}"])
-        self.assertNotIn("envFile", configurations[3])
+        self.assertEqual(configurations[3]["envFile"], "")
 
         self.assertEqual(configurations[4]["module"], "unittest")
         self.assertEqual(
             configurations[4]["args"],
             ["discover", "-s", "tests", "-p", "test_*.py", "-v"],
         )
-        self.assertNotIn("envFile", configurations[4])
+        self.assertEqual(configurations[4]["envFile"], "")
 
     def test_launch_prompt_inputs_are_non_secret_and_replaceable(self) -> None:
         launch = load_vscode_json("launch.json")

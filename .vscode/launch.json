@@ -48,6 +48,7 @@
         "${relativeFile}"
       ],
       "cwd": "${workspaceFolder}",
+      "envFile": "",
       "console": "integratedTerminal",
       "justMyCode": true
     },
@@ -65,6 +66,7 @@
         "-v"
       ],
       "cwd": "${workspaceFolder}",
+      "envFile": "",
       "console": "integratedTerminal",
       "justMyCode": true
     }
