@@ -16,5 +16,8 @@ dependencies = [
     "tqdm>=4.66.0",
 ]
 
+[project.scripts]
+bear-code = "agents.main:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["agents"]

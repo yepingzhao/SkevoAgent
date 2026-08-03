@@ -41,7 +41,7 @@ from .online_skill_eval import format_online_skill_eval_async
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="mini-claude",
+        prog="bear-code",
         description="Bear Code — a minimal coding agent",
         add_help=False,
     )
@@ -363,14 +363,14 @@ REPL commands:
   /<skill-name>       Invoke a skill (e.g. /commit "fix types")
 
 Examples:
-  mini-claude "fix the bug in src/app.ts"
-  mini-claude --yolo "run all tests and fix failures"
-  mini-claude --plan "how would you refactor this?"
-  mini-claude --max-cost 0.50 --max-turns 20 "implement feature X"
-  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic mini-claude "hello"
-  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 mini-claude "hello"
-  mini-claude --resume
-  mini-claude  # starts interactive REPL
+  bear-code "fix the bug in src/app.ts"
+  bear-code --yolo "run all tests and fix failures"
+  bear-code --plan "how would you refactor this?"
+  bear-code --max-cost 0.50 --max-turns 20 "implement feature X"
+  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic bear-code "hello"
+  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 bear-code "hello"
+  bear-code --resume
+  bear-code  # starts interactive REPL
 """)
         sys.exit(0)
 
