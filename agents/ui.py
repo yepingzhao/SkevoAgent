@@ -27,6 +27,39 @@ def _safe_stdout_write(text: object) -> None:
     sys.stdout.flush()
 
 
+_output_lock = threading.Lock()
+_assistant_text_pending = False
+_assistant_trailing_newlines = 0
+
+
+def _record_assistant_text(text: str) -> None:
+    global _assistant_text_pending, _assistant_trailing_newlines
+    if not text:
+        return
+    _assistant_text_pending = True
+    trailing_newlines = len(text) - len(text.rstrip("\n"))
+    if trailing_newlines == len(text):
+        _assistant_trailing_newlines = min(2, _assistant_trailing_newlines + trailing_newlines)
+    else:
+        _assistant_trailing_newlines = min(2, trailing_newlines)
+
+
+def _prepare_structured_output() -> None:
+    global _assistant_text_pending, _assistant_trailing_newlines
+    if not _assistant_text_pending:
+        return
+    missing_newlines = max(0, 2 - _assistant_trailing_newlines)
+    if missing_newlines:
+        _safe_stdout_write("\n" * missing_newlines)
+    _assistant_text_pending = False
+    _assistant_trailing_newlines = 0
+
+
+def _print_structured(renderable: object) -> None:
+    _prepare_structured_output()
+    console.print(renderable)
+
+
 COOKIE_BEAR = r"""
         _     _
       _( )___( )_
@@ -78,7 +111,9 @@ def print_user_prompt() -> None:
 
 
 def print_assistant_text(text: str) -> None:
+    text = _safe_text(text)
     _safe_stdout_write(text)
+    _record_assistant_text(text)
 
 
 def print_tool_call(name: str, inp: dict) -> None:
@@ -90,7 +125,7 @@ def print_tool_call(name: str, inp: dict) -> None:
     table.add_row("tool", f"{icon} {name}")
     if summary:
         table.add_row("input", _safe_text(summary))
-    console.print(Panel(
+    _print_structured(Panel(
         table,
         title="[bold yellow]Tool Call[/bold yellow]",
         border_style="yellow",
@@ -108,7 +143,7 @@ def print_tool_result(name: str, result: str) -> None:
     truncated = result
     if len(result) > max_len:
         truncated = result[:max_len] + f"\n  ... ({len(result)} chars total)"
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(truncated),
         title=f"[dim]{name} result[/dim]",
         border_style="dim",
@@ -119,7 +154,7 @@ def print_tool_result(name: str, result: str) -> None:
 
 def _print_file_change_result(_name: str, result: str) -> None:
     lines = result.split("\n")
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(lines[0]),
         title="[bold green]File Change[/bold green]",
         border_style="green",
@@ -147,7 +182,7 @@ def _print_file_change_result(_name: str, result: str) -> None:
 
 
 def print_error(msg: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(msg),
         title="[bold red]Error[/bold red]",
         border_style="red",
@@ -157,7 +192,7 @@ def print_error(msg: str) -> None:
 
 
 def print_confirmation(command: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(command),
         title="[bold yellow]Dangerous command[/bold yellow]",
         border_style="yellow",
@@ -167,6 +202,7 @@ def print_confirmation(command: str) -> None:
 
 
 def print_divider() -> None:
+    _prepare_structured_output()
     console.rule("[dim]turn complete[/dim]", style="dim")
 
 
@@ -180,15 +216,20 @@ def print_cost(input_tokens: int, output_tokens: int) -> None:
     table.add_row("input", f"{input_tokens} tokens")
     table.add_row("output", f"{output_tokens} tokens")
     table.add_row("estimate", f"${total:.4f}")
-    console.print(Panel(table, title="Cost", border_style="cyan", box=box.ROUNDED))
+    _print_structured(Panel(table, title="Cost", border_style="cyan", box=box.ROUNDED))
 
 
 def print_retry(attempt: int, max_retries: int, reason: str) -> None:
-    console.print(_safe_text(f"\n  [yellow]↻ Retry {attempt}/{max_retries}: {reason}[/yellow]"))
+    with _output_lock:
+        had_pending_assistant_text = _assistant_text_pending
+        _prepare_structured_output()
+        if _spinner_thread is not None and not had_pending_assistant_text:
+            _safe_stdout_write("\n")
+        console.print(_safe_text(f"  [yellow]↻ Retry {attempt}/{max_retries}: {reason}[/yellow]"))
 
 
 def print_info(msg: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(msg),
         title="[bold cyan]Info[/bold cyan]",
         border_style="cyan",
@@ -198,7 +239,7 @@ def print_info(msg: str) -> None:
 
 
 def print_warning(msg: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(msg),
         title="[bold yellow]Notice[/bold yellow]",
         border_style="yellow",
@@ -208,7 +249,7 @@ def print_warning(msg: str) -> None:
 
 
 def print_goodbye() -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         Text("Bye. Bear cookie saved for next time.", style="bold #f6c177"),
         border_style="#d19a66",
         box=box.ROUNDED,
@@ -236,11 +277,13 @@ def start_spinner(label: str = "Thinking") -> None:
 
     def _run() -> None:
         frame = 0
-        _safe_stdout_write(f"\n  {SPINNER_FRAMES[0]} {label}...")
+        with _output_lock:
+            _safe_stdout_write(f"\n  {SPINNER_FRAMES[0]} {label}...")
         while not _spinner_stop.is_set():
             time.sleep(0.08)
             frame = (frame + 1) % len(SPINNER_FRAMES)
-            _safe_stdout_write(f"\r  {SPINNER_FRAMES[frame]} {label}...")
+            with _output_lock:
+                _safe_stdout_write(f"\r  {SPINNER_FRAMES[frame]} {label}...")
 
     _spinner_thread = threading.Thread(target=_run, daemon=True)
     _spinner_thread.start()
@@ -253,7 +296,8 @@ def stop_spinner() -> None:
     _spinner_stop.set()
     _spinner_thread.join(timeout=1)
     _spinner_thread = None
-    _safe_stdout_write("\r\033[K")
+    with _output_lock:
+        _safe_stdout_write("\r\033[K")
 
 
 # ─── Plan approval display ──────────────────────────────────
@@ -265,7 +309,7 @@ def print_plan_for_approval(plan_content: str) -> None:
     preview = "\n".join(lines[:max_lines])
     if len(lines) > max_lines:
         preview += f"\n\n... ({len(lines) - max_lines} more lines)"
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(preview),
         title="[bold cyan]Plan for Approval[/bold cyan]",
         border_style="cyan",
@@ -283,14 +327,14 @@ def print_plan_approval_options() -> None:
     table.add_row("2", "Execute", "keep context, auto-accept edits")
     table.add_row("3", "Manually approve edits", "keep context, confirm each edit")
     table.add_row("4", "Keep planning", "provide feedback to revise")
-    console.print(Panel(table, title="[bold yellow]Choose an option[/bold yellow]", border_style="yellow", box=box.ROUNDED))
+    _print_structured(Panel(table, title="[bold yellow]Choose an option[/bold yellow]", border_style="yellow", box=box.ROUNDED))
 
 
 # ─── Sub-agent display ──────────────────────────────────────
 
 
 def print_sub_agent_start(agent_type: str, description: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         _safe_text(description),
         title=f"[bold magenta]Sub-agent started: {agent_type}[/bold magenta]",
         border_style="magenta",
@@ -300,7 +344,7 @@ def print_sub_agent_start(agent_type: str, description: str) -> None:
 
 
 def print_sub_agent_end(agent_type: str, _description: str) -> None:
-    console.print(Panel(
+    _print_structured(Panel(
         "completed",
         title=f"[bold magenta]Sub-agent finished: {agent_type}[/bold magenta]",
         border_style="magenta",
@@ -320,7 +364,7 @@ def print_memory_entries(memories: list[object]) -> None:
             _safe_text(getattr(m, "name", "")),
             _safe_text(getattr(m, "description", "")),
         )
-    console.print(Panel(table, title="[bold cyan]Memories[/bold cyan]", border_style="cyan", box=box.ROUNDED))
+    _print_structured(Panel(table, title="[bold cyan]Memories[/bold cyan]", border_style="cyan", box=box.ROUNDED))
 
 
 def print_skill_entries(skills: list[object]) -> None:
@@ -338,7 +382,7 @@ def print_skill_entries(skills: list[object]) -> None:
             _safe_text(getattr(s, "context", "")),
             _safe_text(getattr(s, "description", "")),
         )
-    console.print(Panel(table, title="[bold cyan]Skills[/bold cyan]", border_style="cyan", box=box.ROUNDED))
+    _print_structured(Panel(table, title="[bold cyan]Skills[/bold cyan]", border_style="cyan", box=box.ROUNDED))
 
 
 # ─── Tool icons and summaries ───────────────────────────────
