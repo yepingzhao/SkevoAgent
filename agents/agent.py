@@ -1402,7 +1402,21 @@ class Agent:
             if self._thinking_mode  in ("adaptive", "enabled"):
                 create_params["thinking"]={"type": "enabled", "budget_tokens": max_output - 1}
 
-            first_text = True
+            output_phase = "none"
+            thinking_trailing_newlines = 0
+
+            def record_thinking_suffix(text: str) -> None:
+                nonlocal thinking_trailing_newlines
+                if not text:
+                    return
+                trailing_newlines = len(text) - len(text.rstrip("\n"))
+                if trailing_newlines == len(text):
+                    thinking_trailing_newlines = min(
+                        2,
+                        thinking_trailing_newlines + trailing_newlines,
+                    )
+                else:
+                    thinking_trailing_newlines = min(2, trailing_newlines)
 
             tool_blocks_by_index: dict[int, dict] = {}
 
@@ -1426,19 +1440,27 @@ class Agent:
                         # 调用 _emit_text()。如果是普通交互，就打印；
                         # 如果是 run_once()，就写入 _output_buffer。
                         if hasattr(delta, "text"):
-                            if first_text:
+                            text = _safe_utf8_text(delta.text)
+                            if output_phase == "none":
                                 stop_spinner()
                                 self._emit_text("\n")
-                                first_text = False
-                            self._emit_text(delta.text)
+                            elif output_phase == "thinking":
+                                missing_newlines = max(0, 2 - thinking_trailing_newlines)
+                                if missing_newlines:
+                                    self._emit_text("\n" * missing_newlines)
+                            output_phase = "text"
+                            self._emit_text(text)
                         #第二种，thinking 内容：
                         #如果模型返回思考内容，也输出出来，并在开头加：[thinking]
                         elif hasattr(delta, 'thinking'):
-                            if first_text:
+                            thinking_text = _safe_utf8_text(delta.thinking)
+                            if output_phase == "none":
                                 stop_spinner()
                                 self._emit_text("\n  [thinking] ")
-                                first_text = False
-                            self._emit_text(delta.thinking)
+                                output_phase = "thinking"
+                            if output_phase == "thinking":
+                                record_thinking_suffix(thinking_text)
+                            self._emit_text(thinking_text)
                         #第三种，工具参数 JSON 片段：工具调用的参数不是一次性返回，
                         # 而是一段一段返回，所以这里不断拼接到 input_json。
                         elif hasattr(delta, 'partial_json'):
