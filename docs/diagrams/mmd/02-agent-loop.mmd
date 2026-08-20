@@ -56,8 +56,12 @@ sequenceDiagram
         else 达到 max_turns / max_cost_usd
             Runtime->>Runtime: 跳过工具并记录预算原因
         else 有 tool call 且预算允许
-            Runtime->>Tools: 权限检查与执行
-            Tools-->>Runtime: tool result / denied / error
+            alt 已提前启动
+                Tools-->>Runtime: 提前执行结果
+            else 尚未执行
+                Runtime->>Tools: 权限检查与执行
+                Tools-->>Runtime: tool result / denied / error
+            end
             Runtime->>Runtime: 将 tool result 追加到消息历史
             opt context break
                 Runtime->>Runtime: 停止当前工具批次并使用新上下文继续
@@ -71,7 +75,9 @@ sequenceDiagram
 
     opt 主 Agent 且未 abort
         Runtime--)State: 异步调度 Skill usage tracking
-        Runtime--)State: 异步调度已成熟窗口的 online evolution
+        opt 存在已成熟的 pending window
+            Runtime--)State: 异步调度已成熟窗口的 online evolution
+        end
         Runtime->>Runtime: 设置下一 pending extraction window
     end
     opt 主 Agent
