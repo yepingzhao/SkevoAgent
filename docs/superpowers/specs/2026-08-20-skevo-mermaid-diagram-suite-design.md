@@ -271,11 +271,11 @@ OpenAI/Anthropic messages 转为 transcript 时，普通 message content 按 12k
 - 用户级 `~/.skevo/skills` 与项目级 `.skevo/skills`；当前实现先加载用户级，项目级同名 Skill 不覆盖用户级。
 - `SKILL.md` frontmatter 解析为 `SkillDefinition`，并进入发现缓存。
 - 自动路径：用户请求经 tokenize/BM25 返回 top 3 摘要，注入 `<retrieved_skills>`，模型再决定是否调用。
-- 显式路径：`/<skill-name> args` 先经 `get_skill_by_name` 检查存在性与 `user_invocable`；不满足时按普通聊天文本处理。inline 直接执行，fork 则先让当前 Agent 请求模型调用 `skill` tool。
+- 显式路径：`/<skill-name> args` 先经 `get_skill_by_name` 检查存在性与 `user_invocable`；不满足时按普通聊天文本处理。inline 直接执行；fork 调用当前 `Agent.chat`，因此仍先执行主 Agent 的自动 retrieval，再请求模型调用 `skill` tool，且模型可能不调用。
 - 真正调用路径：`execute_skill` 找到 Skill 后先写 invocation stats，再由 `resolve_skill_prompt` 解析参数与 Skill 目录占位符，最后进入 `inline`/`fork`。
 - `inline` 在模型工具路径中把完整 Prompt 作为 tool result 返回当前 Agent Loop；REPL inline 路径以该 Prompt 开启当前主 Agent 的新 `chat`。
 - `fork` 按 `allowed_tools` 的当前真值语义选择父 Agent 工具，并以 Skill Prompt 作为子 Agent 的 base system。子 Agent 使用新消息历史；父 Agent 为 Plan Mode 时，初始化过程再追加子 Agent 自己的 Plan Mode prompt 并生成专属 plan path，否则使用 `bypassPermissions`。最终文本和 token 增量返回父 Agent。
-- 模型工具调用未知 Skill 时返回明确错误文本；未知或不可用户调用的 REPL slash 命令落回普通聊天；fork 的 `run_once` 异常转换为错误文本。
+- 模型工具调用未知 Skill 时返回明确错误文本；未知或不可用户调用的 REPL slash 命令落回普通聊天；fork 的 `run_once` 异常转换为错误文本。父 Agent 只在 `run_once` 成功返回后累加子 Agent token，因此异常前子 Agent 已消耗的 token 当前不会回计父 Agent。
 
 排除：在线 add/merge/discard、replay、champion 和 MCP 初始化。
 
