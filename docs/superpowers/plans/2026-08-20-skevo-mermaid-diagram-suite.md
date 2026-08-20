@@ -749,74 +749,143 @@ title: Skill 发现、检索、调用与执行
 config:
   theme: base
   look: classic
+  layout: elk
   flowchart:
     curve: basis
 ---
-%% Purpose: 区分 Skill 发现、自动检索、显式调用和 inline/fork 执行。
+%% Purpose: 区分 Skill 的磁盘发现与缓存、自动检索、显式 REPL 调用，以及 inline/fork 的真实执行边界。
 %% Audience: both
 %% Sources: agents/skills.py, agents/main.py, agents/agent.py, agents/skill_evolution.py
 %% Anchors: discover_skills, retrieve_relevant_skills, format_retrieved_skill_context, execute_skill, Agent._execute_skill_tool
-%% Out of scope: 在线 add/merge/discard、评测和 MCP 初始化。
+%% Verified: 2026-08-20 against the current Python implementation.
+%% Out of scope: 在线 add/merge/discard、replay/champion 评测、MCP 初始化和通用子 Agent 生命周期（见图 09）。
 
 flowchart TD
-    USER_SKILLS[("💾 ~/.skevo/skills")]
-    PROJECT_SKILLS[("💾 项目 .skevo/skills")]
-    LOAD["加载 SKILL.md frontmatter"]
-    DEFINITIONS["★ SkillDefinition cache<br/>用户级同名项优先；项目级不覆盖"]
-    REQUEST["👤 用户请求"]
-    BM25["BM25 检索<br/>metadata 词频 ×3 + 正文前 2500 chars<br/>score ≥ 0.08，最多 top 3"]
-    HITS{"有相关 Skill?"}
-    SUMMARY["top 3 metadata<br/>retrieved_skills"]
-    MODEL["◇ 模型判断是否调用"]
-    EXPLICIT["/<skill-name> args"]
-    LOOKUP["get_skill_by_name"]
-    USER_OK{"存在且 user_invocable?"}
-    FALLBACK["按普通文本进入 Agent.chat<br/>不直接返回 Unknown"]
-    FORK_REQUEST["fork slash：请求模型调用 skill tool"]
-    TOOL_CALL["模型调用 skill tool"]
-    EXECUTE["execute_skill<br/>按 name 再次查找"]
-    KNOWN{"Skill 存在?"}
-    STATS["记录 invocation stats"]
-    RESOLVE["resolve_skill_prompt<br/>参数与 Skill 目录占位符"]
-    MODE{"context mode"}
-    INLINE["inline：Prompt 回到当前 Agent Loop"]
-    FORK["fork：按 allowed_tools 当前真值语义选工具<br/>隔离 system prompt / history；详见图 09"]
-    ERROR["❌ Unknown Skill / Skill fork error"]
+    accTitle: Skill 发现、检索、调用与执行
+    accDescr: 自上而下展示 Skill 首次发现与缓存、主 Agent 的自动 BM25 检索和 REPL 显式调用两条入口，以及真正调用后的 inline 或 fork 执行；检索摘要只帮助模型判断，不会自动激活 Skill
 
-    USER_SKILLS --> LOAD
-    PROJECT_SKILLS --> LOAD
-    LOAD --> DEFINITIONS
-    REQUEST --> BM25
-    DEFINITIONS --> BM25
-    BM25 --> HITS
-    HITS -->|否| MODEL
-    HITS -->|是| SUMMARY --> MODEL
-    MODEL -->|调用 skill| TOOL_CALL --> EXECUTE
-    EXPLICIT --> LOOKUP --> USER_OK
-    USER_OK -->|否| FALLBACK --> REQUEST
-    USER_OK -->|是：inline| EXECUTE
-    USER_OK -->|是：fork| FORK_REQUEST --> MODEL
-    DEFINITIONS --> LOOKUP
-    EXECUTE --> KNOWN
-    KNOWN -->|否| ERROR
-    KNOWN -->|是| STATS --> RESOLVE --> MODE
-    MODE -->|inline| INLINE
-    MODE -->|fork| FORK
+    subgraph DISCOVERY["A · 发现、解析与进程内缓存"]
+        direction LR
+        USER_ROOT[("💾 用户级<br/>~/.skevo/skills/*/SKILL.md")]
+        PROJECT_ROOT[("💾 项目级<br/>&lt;cwd&gt;/.skevo/skills/*/SKILL.md")]
+        CACHE["首次 discover 时扫描目录型 SKILL.md<br/>解析 frontmatter + 正文为 SkillDefinition<br/>解析失败静默忽略；用户级同名优先<br/>结果写入进程内 cache，后续直接复用"]
+        REFRESH["刷新来源<br/>重启，或 create / evolve / prune<br/>成功后显式 reset"]
+
+        USER_ROOT --> CACHE
+        PROJECT_ROOT --> CACHE
+        REFRESH -->|cache = None；下次 discover 调用重扫| CACHE
+    end
+
+    subgraph ENTRIES["B · 两类入口：retrieval 不等于 invocation"]
+        direction LR
+
+        subgraph AUTO["B1 · 主 Agent 自动检索"]
+            direction TB
+            REQUEST["👤 普通用户请求<br/>仅主 Agent执行 retrieval"]
+            RETRIEVE["tokenize + BM25<br/>ASCII / 中文词元与 bigram；过滤 stop tokens<br/>metadata 词频 ×3，正文前 2500 chars ×1<br/>score ≥ 0.08，最多 top 3"]
+            HITS{"有命中?"}
+            AUGMENT["生成摘要：name / score / source /<br/>description / when-to-use<br/>追加 &lt;retrieved_skills&gt; 到本轮 user message"]
+            MODEL{"◇ 模型判断<br/>忽略还是调用 skill tool?<br/>tool 路径不检查 user_invocable"}
+            NO_ACTIVATE["继续普通 Agent Loop<br/>没有 Skill invocation"]
+            AUTO_TOOL["模型发出 skill tool call"]
+
+            REQUEST --> RETRIEVE --> HITS
+            HITS -->|是| AUGMENT --> MODEL
+            HITS -->|无命中或检索异常：原消息| MODEL
+            MODEL -->|忽略| NO_ACTIVATE
+            MODEL -->|调用| AUTO_TOOL
+        end
+
+        subgraph SLASH["B2 · REPL 显式 /&lt;skill-name&gt; args"]
+            direction TB
+            SLASH_INPUT["👤 /&lt;name&gt; args"]
+            LOOKUP{"get_skill_by_name<br/>存在且 user_invocable?"}
+            FALLBACK["否：按普通文本进入 Agent.chat<br/>不会直接返回 Unknown；随后可走 B1"]
+            SLASH_MODE{"context?"}
+            INLINE_DIRECT["inline：REPL 直接 execute_skill"]
+            FORK_REQUEST["fork：当前 Agent.chat 请求模型<br/>调用 skill tool"]
+            FORK_MODEL{"◇ 模型实际调用?"}
+            FORK_IGNORED["未调用：没有 Skill invocation"]
+            SLASH_TOOL["模型发出 skill tool call"]
+
+            SLASH_INPUT --> LOOKUP
+            LOOKUP -->|否| FALLBACK
+            LOOKUP -->|是| SLASH_MODE
+            SLASH_MODE -->|inline| INLINE_DIRECT
+            SLASH_MODE -->|fork| FORK_REQUEST --> FORK_MODEL
+            FORK_MODEL -->|否| FORK_IGNORED
+            FORK_MODEL -->|是| SLASH_TOOL
+        end
+    end
+
+    subgraph EXECUTION["C · 真正调用与执行"]
+        direction TB
+        TOOL_ROUTE["Agent._execute_skill_tool"]
+        EXECUTE{"execute_skill<br/>同步按 name 再次查找<br/>Skill 存在?"}
+        UNKNOWN["❌ 返回 tool result<br/>Unknown skill: &lt;name&gt;"]
+        PREPARE["先写 invocation stats 到 usage.jsonl<br/>再 resolve_skill_prompt：替换<br/>$ARGUMENTS / ${ARGUMENTS} / ${CLAUDE_SKILL_DIR}"]
+        MODE{"context mode"}
+
+        INLINE_CALLER{"inline 调用来自哪里?"}
+        INLINE_TOOL["skill tool：activated + 完整 Prompt<br/>作为 tool result 回当前循环"]
+        INLINE_REPL["REPL direct：以完整 Prompt<br/>开启当前主 Agent 的新 chat<br/>仍会执行主 Agent retrieval"]
+
+        TOOLS_MODE{"allowed_tools 为真值?"}
+        FILTER["是：按名称过滤父 Agent<br/>当前 self.tools"]
+        INHERIT["否，包括未配置或 []：<br/>继承父 tools，但移除 agent 工具"]
+        FORK_AGENT["创建独立 Agent<br/>base system = Skill Prompt；新 history；is_sub_agent<br/>父为 plan：追加子 Agent 自己的 Plan prompt<br/>并生成专属 plan path；否则 bypassPermissions"]
+        RUN_ONCE["run_once(args 或默认任务)<br/>不做 retrieval / MCP lazy init /<br/>usage tracking / Session auto-save"]
+        FORK_OK["返回最终文本或 no output<br/>token 增量计入父 Agent"]
+        FORK_ERROR["❌ run_once 异常<br/>转为 Skill fork error 文本"]
+        CURRENT_LOOP["↩ 当前 Agent Loop"]
+
+        FORK_BOUNDARIES["⚠ 当前工具边界<br/>白名单过滤为空时，custom_tools=[] 因 or 语义回退默认 tools；<br/>入选的父 MCP schema 在子 Agent 中没有对应连接"]
+        FIG09["图 09 补充通用子 Agent 生命周期；<br/>本图保留 Skill fork 特有的 Prompt、权限与工具语义"]
+
+        TOOL_ROUTE --> EXECUTE
+        INLINE_DIRECT --> EXECUTE
+        EXECUTE -->|否| UNKNOWN --> CURRENT_LOOP
+        EXECUTE -->|是| PREPARE --> MODE
+        MODE -->|inline| INLINE_CALLER
+        INLINE_CALLER -->|skill tool| INLINE_TOOL --> CURRENT_LOOP
+        INLINE_CALLER -->|REPL direct| INLINE_REPL --> CURRENT_LOOP
+        MODE -->|fork；仅 tool 路径| TOOLS_MODE
+        TOOLS_MODE -->|是| FILTER --> FORK_AGENT
+        TOOLS_MODE -->|否| INHERIT --> FORK_AGENT
+        FORK_AGENT --> RUN_ONCE
+        RUN_ONCE -->|成功| FORK_OK --> CURRENT_LOOP
+        RUN_ONCE -->|异常| FORK_ERROR --> CURRENT_LOOP
+    end
+
+    CACHE -->|同步候选 Skill 集| RETRIEVE
+    CACHE -->|同步 name 查找| LOOKUP
+    CACHE -->|同步 name 查找| EXECUTE
+    AUTO_TOOL --> TOOL_ROUTE
+    SLASH_TOOL --> TOOL_ROUTE
 
     classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
-    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
     classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
     classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
     classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
-    class REQUEST,EXPLICIT actor
-    class MODEL model
-    class USER_SKILLS,PROJECT_SKILLS,LOAD,DEFINITIONS,STATS state
-    class BM25,HITS,LOOKUP,USER_OK,KNOWN,MODE control
-    class SUMMARY,FORK_REQUEST,TOOL_CALL,EXECUTE,RESOLVE,INLINE,FORK extension
-    class FALLBACK state
-    class ERROR error
+    class REQUEST,SLASH_INPUT actor
+    class RETRIEVE,AUGMENT,AUTO_TOOL,INLINE_DIRECT,FORK_REQUEST,SLASH_TOOL,TOOL_ROUTE,PREPARE,INLINE_TOOL,INLINE_REPL,FILTER,INHERIT,RUN_ONCE,CURRENT_LOOP runtime
+    class MODEL,FORK_MODEL model
+    class HITS,LOOKUP,SLASH_MODE,EXECUTE,MODE,INLINE_CALLER,TOOLS_MODE control
+    class USER_ROOT,PROJECT_ROOT,CACHE,REFRESH state
+    class FORK_AGENT,FORK_OK extension
+    class NO_ACTIVATE,FALLBACK,FORK_IGNORED,FORK_BOUNDARIES,FIG09 note
+    class UNKNOWN,FORK_ERROR error
+
+    style DISCOVERY fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
+    style ENTRIES fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style AUTO fill:#F7FCFF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    style SLASH fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style EXECUTION fill:#FAF7FF,stroke:#7040A8,stroke-width:2px,color:#32184F
 ```
 
 - [ ] **Step 2: Validate and render**
