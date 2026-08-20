@@ -216,7 +216,7 @@ Mermaid 使用约束：
 8. `dontAsk` 对需要确认的操作自动拒绝。
 9. 其余操作允许。
 
-Plan Mode 状态：`--plan` 初始化或显式进入时生成唯一 plan 文件路径并注入 system prompt；通过 `/plan` 或 `enter_plan_mode` 显式进入时还会保存原模式。plan 文件本身要到工具写入时才会创建。运行时由 system prompt 声明只读意图，并由 `check_permission` 执行部分约束。再次执行 `/plan` 会直接恢复原模式；`exit_plan_mode` 在无审批回调时也会恢复原模式。交互式审批原本提供继续规划、执行、清空上下文后执行和手工执行四种选择，但当前实现会先触发下述异步回调缺陷，因而这些选择分支实际不可达。
+Plan Mode 状态：`--plan` 初始化或显式进入时生成唯一 plan 文件路径并注入 system prompt；只有通过 `/plan` 或 `enter_plan_mode` 显式进入时才执行 `_pre_plan_mode = 当前模式`，CLI `--plan` 初始化不会保存 `_pre_plan_mode`。plan 文件本身要到工具写入时才会创建。运行时由 system prompt 声明只读意图，并由 `check_permission` 执行部分约束。再次执行 `/plan`，以及无审批回调时执行 `exit_plan_mode`，都会通过 `permission_mode = _pre_plan_mode or "default"` 退出：显式进入通常恢复所保存的模式，而 CLI `--plan` 因 `_pre_plan_mode` 为 `None` 会落到 `default`。交互式审批原本提供继续规划、执行、清空上下文后执行和手工执行四种选择，但当前实现会先触发下述异步回调缺陷，因而这些选择分支实际不可达。
 
 当前实现风险必须显式注记：
 

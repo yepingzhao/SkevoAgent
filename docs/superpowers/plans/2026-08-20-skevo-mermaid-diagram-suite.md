@@ -373,7 +373,7 @@ git commit -m "docs: add tool loading and dispatch diagram"
 
 - [ ] **Step 1: Write the complete flowchart**
 
-> 实现核对（以此说明和最终 MMD 为准，下面代码块仅保留最初的布局草稿）：`--plan` 和显式进入只生成唯一 plan 路径，文件要到工具写入时才创建；`/plan` 可直接退出，`exit_plan_mode` 无审批回调时恢复原模式；REPL 的异步审批回调当前未被 `await`，四个审批选择分支实际不可达。图中还必须标出 plan 正文未读取、审批分支未更新 `permission_mode`、Plan Mode enforcement 范围偏宽，以及 `/plan` 进入时未同步 OpenAI system message。主权限流必须保持 `check_permission` 的真实短路顺序。
+> 实现核对（以此说明和下面的审阅版源码为准）：`--plan` 和显式进入只生成唯一 plan 路径，文件要到工具写入时才创建；只有 `/plan` 或 `enter_plan_mode` 显式进入会保存 `_pre_plan_mode`，CLI `--plan` 初始化不会保存。再次 `/plan` 和无审批回调的 `exit_plan_mode` 都执行 `permission_mode = _pre_plan_mode or "default"`，因此 CLI `--plan` 退出落到 `default`。REPL 的异步审批回调当前未被 `await`，四个审批选择分支实际不可达。图中还必须标出 plan 正文未读取、审批分支未更新 `permission_mode`、Plan Mode enforcement 范围偏宽，以及 `/plan` 进入时未同步 OpenAI system message。主权限流必须保持 `check_permission` 的真实短路顺序。
 
 ```mermaid
 ---
@@ -381,91 +381,160 @@ title: 权限决策与 Plan Mode 状态转换
 config:
   theme: base
   look: classic
+  layout: elk
   flowchart:
     curve: basis
 ---
-%% Purpose: 严格展示 check_permission 的判断顺序和 Plan Mode 的状态转换。
+%% Purpose: 严格展示 check_permission 的短路判断顺序，以及 Plan Mode 的实际状态转换与已知风险。
 %% Audience: maintainer
 %% Sources: agents/main.py, agents/tools.py, agents/agent.py
-%% Anchors: _resolve_permission_mode, check_permission, Agent.toggle_plan_mode, Agent._execute_plan_mode_tool
-%% Out of scope: 工具 schema 加载、工具内部实现。
+%% Anchors: _resolve_permission_mode, check_permission, Agent.toggle_plan_mode, Agent._execute_plan_mode_tool, run_repl.plan_approval_fn
+%% Out of scope: 工具 schema 加载、工具内部实现、权限规则文件格式细节。
 
-flowchart TD
-    START(["tool call"])
-    BYPASS{"bypassPermissions?"}
-    RULE_DENY{"permission rule deny?"}
-    RULE_ALLOW{"permission rule allow?"}
-    READ{"READ_TOOLS?"}
-    PLAN{"permission_mode = plan?"}
-    PLAN_EDIT{"EDIT_TOOLS?"}
-    PLAN_FILE{"目标是唯一 plan 文件?"}
-    PLAN_SHELL{"run_shell?"}
-    PLAN_TOOL{"enter / exit plan mode?"}
-    ACCEPT{"acceptEdits 且为 EDIT_TOOLS?"}
-    NEED_CONFIRM{"危险或需确认操作?"}
-    DONTASK{"dontAsk?"}
-    USER_CONFIRM{"👤 用户确认?"}
-    ALLOW(["允许执行"])
-    DENY(["❌ 拒绝并返回 tool result"])
+flowchart TB
+    accTitle: 权限决策与 Plan Mode 状态转换
+    accDescr: 先按三个阶段自上而下展示 check_permission 的真实短路顺序，再展示 Plan Mode 的进入和退出状态；显式进入会保存原模式，命令行 plan 初始化不会保存，因此退出时的相同赋值可能得到不同结果
 
-    START --> BYPASS
-    BYPASS -->|是| ALLOW
-    BYPASS -->|否| RULE_DENY
-    RULE_DENY -->|是| DENY
-    RULE_DENY -->|否| RULE_ALLOW
-    RULE_ALLOW -->|是| ALLOW
-    RULE_ALLOW -->|否| READ
-    READ -->|是| ALLOW
-    READ -->|否| PLAN
-    PLAN -->|否| PLAN_TOOL
-    PLAN -->|是| PLAN_EDIT
-    PLAN_EDIT -->|是| PLAN_FILE
-    PLAN_FILE -->|是| ALLOW
-    PLAN_FILE -->|否| DENY
-    PLAN_EDIT -->|否| PLAN_SHELL
-    PLAN_SHELL -->|是| DENY
-    PLAN_SHELL -->|否| PLAN_TOOL
-    PLAN_TOOL -->|是| ALLOW
-    PLAN_TOOL -->|否| ACCEPT
-    ACCEPT -->|是| ALLOW
-    ACCEPT -->|否| NEED_CONFIRM
-    NEED_CONFIRM -->|否| ALLOW
-    NEED_CONFIRM -->|是| DONTASK
-    DONTASK -->|是| DENY
-    DONTASK -->|否| USER_CONFIRM
-    USER_CONFIRM -->|允许| ALLOW
-    USER_CONFIRM -->|拒绝| DENY
+    subgraph STAGE1["A1 · 优先短路"]
+        direction TB
+        CALL(["收到 tool call"])
+        BYPASS{"mode = bypassPermissions?"}
+        RULE_DENY{"命中 deny rule?"}
+        RULE_ALLOW{"命中 allow rule?"}
+        READ{"属于 READ_TOOLS?"}
+        PLAN{"mode = plan?"}
+        ALLOW_BYPASS(["返回 allow<br/>bypass 优先"])
+        DENY_RULE(["返回 deny<br/>规则拒绝"])
+        ALLOW_RULE(["返回 allow<br/>规则允许"])
+        ALLOW_READ(["返回 allow<br/>READ_TOOLS"])
 
-    subgraph PLAN_STATE["Plan Mode 状态"]
-        ENTER["进入：保存原模式<br/>生成 plan 文件<br/>注入 Plan prompt"]
-        ACTIVE["运行：READ_TOOLS + plan 文件<br/>显式拒绝 EDIT_TOOLS / Shell"]
-        EXIT["退出：继续规划 / 执行 / 手工执行"]
-        RISK["⚠ 当前实现核对<br/>异步审批未 await<br/>未读取 plan 正文<br/>target_mode 未赋给 permission_mode<br/>其他工具可能默认允许"]
-        ENTER --> ACTIVE --> EXIT
-        ACTIVE -.-> RISK
+        CALL --> BYPASS
+        BYPASS -->|否| RULE_DENY
+        BYPASS -->|是| ALLOW_BYPASS
+        RULE_DENY -->|否| RULE_ALLOW
+        RULE_DENY -->|是| DENY_RULE
+        RULE_ALLOW -->|否| READ
+        RULE_ALLOW -->|是| ALLOW_RULE
+        READ -->|否| PLAN
+        READ -->|是| ALLOW_READ
     end
 
-    PLAN_TOOL -.->|enter_plan_mode| ENTER
-    PLAN_TOOL -.->|exit_plan_mode| EXIT
+    subgraph STAGE2["A2 · Plan Mode 限制"]
+        direction TB
+        PLAN_EDIT{"属于 EDIT_TOOLS?"}
+        PLAN_PATH{"file_path / path<br/>等于唯一 plan 路径?"}
+        PLAN_SHELL{"工具是 run_shell?"}
+        PLAN_PASS["未被 Plan Mode 限制拦截"]
+        ALLOW_PLAN_FILE(["返回 allow<br/>唯一 plan 路径"])
+        DENY_PLAN_EDIT(["返回 deny<br/>plan 禁止该编辑"])
+        DENY_PLAN_SHELL(["返回 deny<br/>plan 禁止 Shell"])
 
+        PLAN -->|否：跳过本阶段| PLAN_PASS
+        PLAN -->|是| PLAN_EDIT
+        PLAN_EDIT -->|否| PLAN_SHELL
+        PLAN_EDIT -->|是| PLAN_PATH
+        PLAN_SHELL -->|否| PLAN_PASS
+        PLAN_SHELL -->|是| DENY_PLAN_SHELL
+        PLAN_PATH -->|是| ALLOW_PLAN_FILE
+        PLAN_PATH -->|否| DENY_PLAN_EDIT
+    end
+
+    subgraph STAGE3["A3 · 确认与默认策略"]
+        direction TB
+        PLAN_TOOL{"enter_plan_mode<br/>或 exit_plan_mode?"}
+        ACCEPT{"mode = acceptEdits<br/>且属于 EDIT_TOOLS?"}
+        NEED_CONFIRM{"危险 Shell / 新文件 write_file /<br/>不存在文件 edit_file /<br/>skill_create / skill_evolve?"}
+        DONTASK{"mode = dontAsk?"}
+        ALLOW_PLAN_TOOL(["返回 allow<br/>计划模式工具"])
+        ALLOW_EDIT(["返回 allow<br/>acceptEdits"])
+        ALLOW_DEFAULT(["返回 allow<br/>默认放行"])
+        DENY_DONTASK(["返回 deny<br/>dontAsk 自动拒绝"])
+        ASK["返回 confirm + 摘要"]
+        RUNTIME_CONFIRM["调用端处理 confirm<br/>已确认摘要可复用；否则询问用户"]
+        EXECUTE(["调用端获准执行"])
+        REJECT(["调用端拒绝并回写 tool result"])
+
+        PLAN_PASS --> PLAN_TOOL
+        PLAN_TOOL -->|否| ACCEPT
+        PLAN_TOOL -->|是| ALLOW_PLAN_TOOL
+        ACCEPT -->|否| NEED_CONFIRM
+        ACCEPT -->|是| ALLOW_EDIT
+        NEED_CONFIRM -->|是| DONTASK
+        NEED_CONFIRM -->|否| ALLOW_DEFAULT
+        DONTASK -->|否| ASK
+        DONTASK -->|是：自动拒绝| DENY_DONTASK
+        ASK --> RUNTIME_CONFIRM
+        RUNTIME_CONFIRM -->|已缓存或用户同意| EXECUTE
+        RUNTIME_CONFIRM -->|用户拒绝| REJECT
+    end
+
+    subgraph PLAN_STATE["B1 · Plan Mode 状态转换"]
+        direction TB
+        MODE_RESOLVE["CLI 初始模式优先级<br/>--yolo → --plan → --accept-edits<br/>→ --dont-ask → default"]
+        NON_PLAN["初始为非 plan mode"]
+        CLI_PLAN["CLI --plan 初始化<br/>生成唯一 plan 路径并注入 prompt<br/>_pre_plan_mode 仍为 None"]
+        EXPLICIT_ENTER["显式进入：/plan 或 enter_plan_mode<br/>_pre_plan_mode = 当前 mode<br/>切换 plan、生成路径并注入 prompt"]
+        ACTIVE["Plan Mode active<br/>prompt 声明只读意图<br/>check_permission 部分强制"]
+        TOGGLE_EXIT["再次 /plan<br/>permission_mode =<br/>_pre_plan_mode or default"]
+        HAS_CALLBACK{"exit_plan_mode<br/>存在审批回调?"}
+        FALLBACK_EXIT["无回调 fallback<br/>permission_mode =<br/>_pre_plan_mode or default"]
+        EXITED(["退出完成<br/>清除路径与 Plan prompt"])
+        ASYNC_BUG["当前失败点<br/>异步审批回调未 await<br/>随后对 coroutine 调用 .get"]
+        EXPECTED["设计中的审批选择（当前不可达）<br/>继续规划 / 执行 / 清上下文后执行 / 手工执行"]
+        CLI_DEFAULT["CLI --plan 未保存 _pre_plan_mode<br/>因此上述赋值退出时落到 default"]
+
+        MODE_RESOLVE -->|结果非 plan| NON_PLAN
+        MODE_RESOLVE -->|结果为 plan| CLI_PLAN --> ACTIVE
+        NON_PLAN -->|显式进入| EXPLICIT_ENTER --> ACTIVE
+        ACTIVE -->|REPL toggle| TOGGLE_EXIT --> EXITED
+        ACTIVE -->|模型工具退出| HAS_CALLBACK
+        HAS_CALLBACK -->|否| FALLBACK_EXIT --> EXITED
+        HAS_CALLBACK -->|是| ASYNC_BUG
+        ASYNC_BUG -.->|若修复 await 后才会进入| EXPECTED
+        CLI_PLAN -.->|退出结果说明| CLI_DEFAULT
+    end
+
+    subgraph RISKS["B2 · 当前实现风险"]
+        direction TB
+        RISK_NOTE["1. READ_TOOLS 含 compact_context；plan 仅显式拒绝 EDIT_TOOLS 与 run_shell，其他工具可能默认允许<br/>2. exit_plan_mode 把文件路径当作 plan_content，未读取正文<br/>3. 审批分支未把 target_mode 赋给 permission_mode<br/>4. /plan 进入时未同步 OpenAI 已有 system message"]
+    end
+
+    RUNTIME_CONFIRM -.->|继续阅读 B（非控制流）| MODE_RESOLVE
+    EXITED -.->|退出路径风险汇总| RISK_NOTE
+    EXPECTED -.->|审批路径风险汇总| RISK_NOTE
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
     classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef state fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef success fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
     classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
 
-    class START,BYPASS,RULE_DENY,RULE_ALLOW,READ,PLAN,PLAN_EDIT,PLAN_FILE,PLAN_SHELL,PLAN_TOOL,ACCEPT,NEED_CONFIRM,DONTASK,USER_CONFIRM,ENTER,ACTIVE,EXIT control
-    class ALLOW success
-    class DENY error
-    class RISK note
+    class CALL actor
+    class BYPASS,RULE_DENY,RULE_ALLOW,READ,PLAN,PLAN_EDIT,PLAN_PATH,PLAN_SHELL,PLAN_TOOL,ACCEPT,NEED_CONFIRM,DONTASK,ASK,RUNTIME_CONFIRM,HAS_CALLBACK control
+    class PLAN_PASS,MODE_RESOLVE,NON_PLAN,CLI_PLAN,EXPLICIT_ENTER,ACTIVE,TOGGLE_EXIT,FALLBACK_EXIT,EXITED state
+    class ALLOW_BYPASS,ALLOW_RULE,ALLOW_READ,ALLOW_PLAN_FILE,ALLOW_PLAN_TOOL,ALLOW_EDIT,ALLOW_DEFAULT,EXECUTE success
+    class DENY_RULE,DENY_PLAN_EDIT,DENY_PLAN_SHELL,DENY_DONTASK,REJECT,ASYNC_BUG error
+    class CLI_DEFAULT,RISK_NOTE note
+    class EXPECTED external
+
+    style STAGE1 fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style STAGE2 fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style STAGE3 fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style PLAN_STATE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style RISKS fill:#FFFBEB,stroke:#A15C00,stroke-width:2px,color:#3A2600
 ```
 
 - [ ] **Step 2: Validate and render**
 
 ```bash
 mmdc -i docs/diagrams/mmd/04-permissions-and-plan-mode.mmd -o /tmp/04-permissions-and-plan-mode.svg -b white
+mmdc -i docs/diagrams/mmd/04-permissions-and-plan-mode.mmd -o /tmp/04-permissions-and-plan-mode.png -b white -s 2
+mmdc -i docs/diagrams/mmd/04-permissions-and-plan-mode.mmd -o /tmp/04-permissions-and-plan-mode-800.png -b white -s 1
 ```
 
-Expected: exit code 0；每个决策分支都有标签；权限主路径与 Plan Mode 状态区清楚分开；当前失败点和风险注记不被画成成功路径；无裁切、重叠或边穿节点。
+Expected: exit code 0；每个决策分支都有标签；按 A1 → A2 → A3 → B1 → B2 纵向阅读；800px 宽预览仍可识别主路径和阶段；当前失败点和风险注记不被画成成功路径；无裁切、重叠或边穿节点。
 
 - [ ] **Step 3: Commit**
 
