@@ -10,12 +10,12 @@ config:
 %% Purpose: 展示模型上下文的组装、运行中缩减、structured folding，以及 Session 的持久化与恢复。
 %% Audience: maintainer
 %% Sources: agents/prompt.py, agents/memory.py, agents/agent.py, agents/session_memory.py, agents/session.py, agents/main.py
-%% Anchors: build_system_prompt, start_memory_prefetch, Agent._run_compression_pipeline, Agent._compact_conversation, Agent._auto_save, Agent.restore_session
+%% Anchors: build_system_prompt, start_memory_prefetch, Agent._run_compression_pipeline, Agent.compact, Agent._execute_compact_context_tool, Agent._check_and_compact, Agent._compact_conversation, Agent._auto_save, Agent.restore_session
 %% Out of scope: Skill 执行、权限决策、模型协议请求字段和长期 Memory 写入策略。
 
 flowchart TB
     accTitle: 上下文、长期记忆与会话生命周期
-    accDescr: 分三个阶段展示系统提示和当前消息如何组成模型上下文，工具结果如何分层缩减并折叠为会话内结构化状态，以及当前消息和折叠记录如何持久化；长期 Memory Markdown 独立于 folded session memory，当前 resume 只恢复 Session JSON 中的后端消息
+    accDescr: 分三个阶段展示系统提示和当前消息如何组成模型上下文，普通工具结果如何分层缩减，REPL 手工、模型工具和自动触发如何折叠会话，以及当前消息和折叠记录如何持久化；长期 Memory 独立于 folded session memory，当前 resume 仅恢复后端消息而不恢复折叠列表和 Session metadata
 
     subgraph ASSEMBLY["阶段 1 · 上下文组装"]
         direction TB
@@ -49,16 +49,20 @@ flowchart TB
         NEXT_MESSAGES["写入当前 backend messages<br/>供下一次模型调用"]
         PIPELINE["每次模型调用前<br/>_run_compression_pipeline"]
         BUDGET["① 单结果字符预算<br/>利用率 ≥50%：30k chars<br/>利用率 &gt;70%：15k chars"]
-        SNIP["② stale-result snipping<br/>利用率 ≥60%，保留近 3 条<br/>Anthropic 仅 4 类可 snip 工具"]
+        SNIP["② stale-result snipping<br/>利用率 ≥60%，保留近 3 条<br/>OpenAI：全部符合条件的历史 role=tool<br/>Anthropic：read_file / grep_search<br/>list_files / run_shell"]
         MICRO["③ idle microcompact<br/>距上次 API 调用 ≥5 min<br/>清旧结果并保留近 3 条"]
-        MANUAL["manual：/compact<br/>tool：compact_context"]
+        MANUAL["REPL /compact（chat 外）<br/>Agent.compact → trigger=manual"]
+        TOOL_FOLD["模型调用 compact_context<br/>执行中 trigger=tool"]
         AUTO["auto：工具批次结束后<br/>last input &gt; 70% effective window"]
         FOLD_GATE{"对应 messages ≥ 4<br/>且 transcript 非空？"}
-        TRANSCRIPT["OpenAI / Anthropic → transcript<br/>单 block ≤12k；总长 ≤80k chars"]
+        TRANSCRIPT["OpenAI / Anthropic → transcript<br/>普通 message content 按 12k clip<br/>总 transcript 按 80k clip<br/>OpenAI tool_call.arguments 不单独 12k clip"]
         SIDE_QUERY{"side query 可用<br/>且返回 JSON 可解析？"}
         FALLBACK["⚠ fallback_folded_memory<br/>保留最多 6k transcript 摘要"]
         FOLDED["folded session state<br/>episode / working / tool memory"]
         REPLACE["替换当前原始历史<br/>OpenAI：system + folded user<br/>Anthropic：单条 folded user"]
+        FOLD_KIND{"本次 trigger 来源？"}
+        MANUAL_DONE["REPL /compact 返回<br/>不产生 tool result / context break"]
+        TOOL_BREAK["_context_cleared = True<br/>工具结果写为新 user message<br/>停止剩余工具 / context break"]
         READY["更新后的当前 messages<br/>进入下一次模型调用"]
 
         TOOL_RESULT --> LARGE
@@ -67,12 +71,16 @@ flowchart TB
         LARGE_STORE -->|引用 + preview| NEXT_MESSAGES
         NEXT_MESSAGES --> PIPELINE --> BUDGET --> SNIP --> MICRO --> READY
         MANUAL --> FOLD_GATE
+        TOOL_FOLD --> FOLD_GATE
         AUTO --> FOLD_GATE
-        FOLD_GATE -->|否| NO_FOLD["不执行 folding"] --> READY
+        FOLD_GATE -->|否| NO_FOLD["不执行 folding<br/>保持历史；按各入口返回 / 继续"] --> READY
         FOLD_GATE -->|是| TRANSCRIPT --> SIDE_QUERY
         SIDE_QUERY -->|是| FOLDED
         SIDE_QUERY -->|否 / 异常| FALLBACK --> FOLDED
-        FOLDED --> REPLACE --> READY
+        FOLDED --> REPLACE --> FOLD_KIND
+        FOLD_KIND -->|manual| MANUAL_DONE
+        FOLD_KIND -->|tool| TOOL_BREAK --> READY
+        FOLD_KIND -->|auto| READY
     end
 
     subgraph PERSISTENCE["阶段 3 · 持久化与恢复"]
@@ -81,7 +89,7 @@ flowchart TB
         FOLD_LOG[("folded-memory artifacts<br/>项目 .skevo/sessions/<br/>JSONL + latest JSON")]
         RESUME["--resume：按 startTime 选择 latest<br/>load_session → restore_session<br/>当前仅传入两种 backend messages"]
         RESTORED["恢复为当前 backend messages<br/>已折叠历史仍以 folded user message 存在"]
-        RESUME_GAP["⚠ 当前恢复缺口<br/>不读取 folded-memory artifacts<br/>也未恢复 Session JSON 的 folded list"]
+        RESUME_GAP["⚠ 当前恢复缺口<br/>不读取 folded-memory artifacts / folded list<br/>metadata：id / model / cwd / startTime 等<br/>仍为新建 Agent 的当前值"]
 
         READY -->|主 Agent 每次 chat 结束自动保存| SESSION
         FOLDED -->|先追加记录| FOLD_LOG
@@ -91,7 +99,8 @@ flowchart TB
         SESSION -.->|folded list 未传给 restore_session| RESUME_GAP
     end
 
-    MODEL -->|tool call 执行后| TOOL_RESULT
+    MODEL -->|普通 tool call 执行后| TOOL_RESULT
+    MODEL -->|compact_context tool| TOOL_FOLD
     TOOL_RESULT -->|工具批次后检查| AUTO
 
     classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
@@ -103,9 +112,9 @@ flowchart TB
     classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
 
     class MODEL model
-    class SYSTEM,CURRENT,NEXT_MESSAGES,PIPELINE,BUDGET,SNIP,MICRO,TRANSCRIPT,REPLACE,READY,RESTORED runtime
+    class SYSTEM,CURRENT,NEXT_MESSAGES,PIPELINE,BUDGET,SNIP,MICRO,TRANSCRIPT,REPLACE,MANUAL_DONE,TOOL_BREAK,READY,RESTORED runtime
     class CATALOG,LONG_MEMORY,INJECT,TOOL_RESULT,LARGE_STORE,FOLDED,SESSION,FOLD_LOG state
-    class PREFETCH,LARGE,MANUAL,AUTO,FOLD_GATE,SIDE_QUERY control
+    class PREFETCH,LARGE,MANUAL,TOOL_FOLD,AUTO,FOLD_GATE,SIDE_QUERY,FOLD_KIND control
     class SKILL_CONTEXT extension
     class FALLBACK,RESUME_GAP error
     class BASE,NO_FOLD,RESUME external
