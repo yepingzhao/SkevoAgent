@@ -1,0 +1,77 @@
+---
+title: 工具加载、按需激活与执行路由
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示工具来源、deferred tool 激活和获准调用的执行路由。
+%% Audience: maintainer
+%% Sources: agents/tools.py, agents/prompt.py, agents/agent.py
+%% Anchors: tool_definitions, get_active_tool_definitions, get_deferred_tool_names, execute_tool, Agent._execute_tool_call
+%% Out of scope: 权限决策树、MCP 握手、子 Agent 类型。
+
+flowchart LR
+    accTitle: 工具加载、按需激活与执行路由
+    accDescr: eager、MCP 和自定义工具进入活动定义；deferred 工具名称先进入系统提示，tool_search 经权限检查和执行路由激活完整 schema；获准调用再按特殊工具、Skill、子 Agent、MCP 或内置工具分派并回写模型
+    subgraph SOURCES["工具来源"]
+        EAGER["⚙ eager tools"]
+        DEFERRED["◌ deferred tools"]
+        MCPDEF["🔌 MCP tool definitions"]
+        CUSTOM["◎ custom tools"]
+    end
+
+    subgraph VISIBILITY["模型可见性"]
+        PROMPT["System Prompt<br/>只列 deferred 名称"]
+        SEARCH["tool_search<br/>eager tool"]
+        SCHEMA["返回完整 tool schema"]
+        ACTIVE["active tool definitions"]
+        MODEL["◇ 下一次模型请求"]
+    end
+
+    CALL["模型产生 tool call"]
+    PERMISSION["🔐 check_permission<br/>详见图 04"]
+    DISPATCH{"⚙ _execute_tool_call 路由"}
+    SPECIAL["compact / plan 特殊工具"]
+    SKILL["★ skill"]
+    AGENT["◎ agent"]
+    MCP["🔌 mcp__server__tool"]
+    BUILTIN["内置 execute_tool"]
+    RESULT["规范化 tool result<br/>截断或大结果落盘"]
+    UNKNOWN["❌ unknown / execution error"]
+
+    EAGER --> ACTIVE
+    MCPDEF --> ACTIVE
+    CUSTOM --> ACTIVE
+    DEFERRED --> PROMPT --> MODEL
+    SEARCH --> ACTIVE
+    ACTIVE --> MODEL
+    MODEL --> CALL --> PERMISSION
+    PERMISSION -->|allow| DISPATCH
+    DISPATCH --> SPECIAL --> RESULT
+    DISPATCH --> SKILL --> RESULT
+    DISPATCH --> AGENT --> RESULT
+    DISPATCH --> MCP --> RESULT
+    DISPATCH --> BUILTIN
+    BUILTIN -->|普通内置工具| RESULT
+    BUILTIN -->|tool_search 命中| SCHEMA
+    SCHEMA -->|激活匹配工具| ACTIVE
+    SCHEMA -->|完整 schema 作为结果| RESULT
+    DISPATCH --> UNKNOWN --> RESULT
+    RESULT -->|回写| MODEL
+
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+
+    class EAGER,DEFERRED,ACTIVE,CALL,DISPATCH,BUILTIN,RESULT runtime
+    class PROMPT,MODEL model
+    class SEARCH,SCHEMA,PERMISSION,SPECIAL control
+    class MCPDEF,CUSTOM,SKILL,AGENT,MCP extension
+    class UNKNOWN error
+
+    style SOURCES fill:#F8FAFC,stroke:#53606F,stroke-width:2px,color:#202833
+    style VISIBILITY fill:#F5FAFF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
