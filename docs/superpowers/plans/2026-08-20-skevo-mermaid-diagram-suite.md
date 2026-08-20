@@ -1129,8 +1129,8 @@ flowchart TB
     subgraph ENTRY_LINEAGE["A · 入口、输入与稳定 lineage"]
         direction LR
         ENTRY["👤 /skill-eval 或 Python API<br/>REPL 写入默认开启，当前无 dry-run CLI<br/>API 可传 side_query = None<br/>或 write_artifacts = False"]
-        INPUTS["输入并集<br/>provenance log / index<br/>usage / lifecycle stats<br/>active Skill snapshots"]
-        SKILL_SET["按所有输入 key 建立 Skill 集<br/>active 缺失时以 lineage / lifecycle<br/>补 name、description；instructions 为空"]
+        INPUTS["输入来源<br/>provenance log / index<br/>usage / lifecycle stats<br/>active Skill snapshots"]
+        SKILL_SET["Skill 名并集仅来自<br/>active snapshots + provenance index keys<br/>+ usage keys + lifecycle keys<br/>原始 log 只供 aggregate / replay rows<br/>log-only Skill 不会仅凭 log 进入评测"]
         LINEAGE["稳定 lineage ID<br/>仅对去首尾空白的 Skill name 做 SHA-1<br/>skill-&lt;16 hex&gt;"]
 
         ENTRY --> INPUTS --> SKILL_SET --> LINEAGE
@@ -1275,7 +1275,7 @@ Expected: both commands exit 0; SVG includes `accTitle`/`accDescr` ARIA metadata
 
 ```bash
 git add docs/diagrams/mmd/08-skill-evaluation.mmd docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md docs/superpowers/plans/2026-08-20-skevo-mermaid-diagram-suite.md
-git commit -m "docs: align Skill evaluation with runtime"
+git commit -m "docs: clarify Skill evaluation inputs"
 ```
 
 ### Task 9: Create the MCP and sub-agent boundaries diagram

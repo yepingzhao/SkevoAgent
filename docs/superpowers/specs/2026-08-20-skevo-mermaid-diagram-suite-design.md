@@ -317,7 +317,7 @@ Promotion candidate 的 dev pre-gate、candidate 选择、Champion load 和 `_pr
 
 Promotion gate：`unobserved`、`incubating`、`pruned` 不晋升且保留原 status；`watch` 返回 `rejected`；首个 `healthy` candidate 成为 `active_champion`；已有 Champion 时，candidate 需要达到 `min_score_delta=0.01` 且不增加 hard failures，否则为 `rejected`。
 
-产物按顺序包括 frozen dataset、eval spec、outputs、judgments、run summary、可选 report，以及仅晋升时写入的 champion registry、champion JSON 和独立 champion `SKILL.md`。Champion 不覆盖 active Skill。`write_artifacts=false` 会跳过 `_persist_eval_artifacts`、dev pre-gate、promotion decision 和 Champion 读写，但 `write_report` 独立。dataset、run artifacts、Champion files、run summary 和 report 的写异常均未统一捕获，异常向上抛出且可能留下非事务的部分产物。
+产物的真实条件顺序为：先冻结 replay dataset，再写 eval spec、outputs 和 judgments；若 promotion decision 为晋升，再依次写 `champions.json` registry、lineage `champion.json` 和独立 champion `SKILL.md`；随后写 run summary；全部 Skills 完成后才按 `write_report` 可选写 report。Champion 不覆盖 active Skill。`write_artifacts=false` 会跳过 frozen dataset 写入、`_persist_eval_artifacts`、dev pre-gate、promotion decision 和 Champion 读写，但 `write_report` 独立。dataset、run artifacts、Champion files、run summary 和 report 的写异常均未统一捕获，异常向上抛出且可能留下非事务的部分产物。
 
 权威锚点：`_build_replay_pool`、`_assign_replay_splits`、`_compile_eval_rules`、`_build_candidate_eval_bundle_async`、`_skill_status`、`_promotion_decision`、`_persist_eval_artifacts`、`_set_champion`。
 
