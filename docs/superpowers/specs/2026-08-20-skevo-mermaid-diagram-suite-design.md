@@ -241,17 +241,21 @@ Plan Mode 状态：`--plan` 初始化或显式进入时生成唯一 plan 文件�
 
 1. 上下文组装：system template、环境、Git context、`CLAUDE.md`、rules、Memory index、Skill descriptions、custom agents、deferred tool names、Plan Mode prompt、fold guidance、消息历史、Skill 摘要和异步 Memory 注入。
 2. 上下文缩减：UTF-8 超过 30 KiB 的工具结果落盘并返回引用与前 200 行预览；每次模型调用前依次执行按利用率启用的单结果字符预算、stale-result snipping 和 idle microcompact；manual/tool/auto structured folding 是另一条替换原始消息历史的路径。stale-result snipping 在利用率至少 60% 时保留最近 3 条：OpenAI 处理全部符合条件的历史 `role=tool` messages，Anthropic 只处理来自 `read_file`、`grep_search`、`list_files`、`run_shell` 的 tool results。
-3. 持久化与恢复：Session JSON 保存当前 backend messages 和 folded-memory 内存列表；每次 fold 另向项目 `.skevo/sessions/` 写入 JSONL/latest artifacts；长期 Memory Markdown 位于项目 hash 隔离的用户目录，并不由 folding 生成。
+3. 持久化与恢复：folding 以 best-effort 方式向项目 `.skevo/sessions/` 写 JSONL/latest artifacts；主 Agent 的 `chat` 正常收尾时再以 best-effort `_auto_save` 写用户级 Session JSON；长期 Memory Markdown 位于项目 hash 隔离的用户目录，并不由 folding 生成。
 
-structured folding：manual 来自 REPL 在 `chat` 外直接调用的 `/compact` → `Agent.compact`；tool 来自模型工具执行中的 `compact_context` → `_compact_conversation(trigger="tool")`；auto 只在工具批次结束且上一次模型输入超过 effective window 的 70% 时检查。三种入口共用“对应 backend messages 至少 4 条且 transcript 非空”的 gate。成功 folding 会先记录 artifacts，再以 folded user message 替换原始历史；OpenAI 额外保留 system message。Anthropic 和 OpenAI 两条路径都只在 tool folding 成功后设置 `_context_cleared = True`，把该工具结果作为新的 user message，停止当前批次剩余工具并触发 context break；REPL `/compact` 不产生 tool result，也不进入 context-break 后果。
+Memory prefetch 的并发边界：运行时先把本轮 user message 追加到 backend messages，再由 `create_task` 启动异步 prefetch。`create_task` 到首轮 settled 检查之间没有 `await`，因此首轮模型 API 不等待 Memory，召回正文不可能进入首轮请求；prefetch 与首轮 API 并发。只有首轮返回 tool call 并进入下一轮时，运行时才会在下一次模型调用前再次检查 settled，成功结果至多注入一次。首轮直接 final answer、任务失败或结果完成过迟都不会阻断；如果没有下一轮，结果不会进入本次 `chat`。
+
+structured folding：manual 来自 REPL 在 `chat` 外直接调用的 `/compact` → `Agent.compact`；tool 来自模型工具执行中的 `compact_context` → `_compact_conversation(trigger="tool")`；auto 只在工具批次结束且上一次模型输入超过 effective window 的 70% 时检查。三种入口共用“对应 backend messages 至少 4 条且 transcript 非空”的 gate。生成 folded state 后，运行时先追加内存 `_folded_session_memories`，再尝试 `save_folded_session_memory`，最后替换 backend messages；artifacts 写入异常会被吞掉，不能阻断消息替换。OpenAI 替换时额外保留 system message。Anthropic 和 OpenAI 两条路径都只在 tool folding 成功后设置 `_context_cleared = True`，把该工具结果作为新的 user message，停止当前批次剩余工具并触发 context break；REPL `/compact` 不产生 tool result，也不进入 context-break 后果。
 
 OpenAI/Anthropic messages 转为 transcript 时，普通 message content 按 12k chars clip，最终 transcript 按 80k chars clip；OpenAI `tool_call.arguments` 没有独立的 12k clip，只受最终总长限制。随后由 side query 生成 episode/working/tool memory；side query 不可用、调用失败或 JSON 解析失败时使用 fallback。
 
-`--resume` 当前按 Session metadata 的 `startTime` 选择 latest Session JSON，并只把 `anthropicMessages` / `openaiMessages` 传给 `Agent.restore_session`。因此已写入消息历史的 folded user message 可以随当前 messages 恢复，但项目 folded-memory artifacts 不参与恢复，Session JSON 中的 `foldedSessionMemories` 列表也没有恢复；保存的 Session metadata（`id`、`model`、`cwd`、`startTime` 等）同样没有恢复，仍使用新建 Agent 的当前值。图中必须把这些实现缺口标为风险，不得画成完整恢复路径。
+持久化边界：只有主 Agent `chat` 正常收尾才尝试 `_auto_save` Session JSON，写入失败异常同样被忽略。REPL `/compact` 会立即走 folded-memory artifacts 的保存尝试，但若之后没有一次正常收尾的 `chat`，其内存 folded list 不会进入 Session JSON。
+
+`--resume` 使用 `get_latest_session_id` 从用户级全局 `~/.skevo/sessions/*.json` 中仅按 metadata `startTime` 选择 latest，不按 `cwd`、project 或 backend 筛选。CLI 会先按当前参数创建新 Agent，再加载 Session，并把 `anthropicMessages` / `openaiMessages` 传给 `Agent.restore_session`；恢复过程不校验或转换保存 backend 与当前 backend。backend 不匹配时，保存历史进入非活动消息列表，当前模型看不到。同 backend OpenAI 恢复会让保存 messages 中的旧 system message 覆盖新 Agent 的当前 prompt，且恢复后的首轮调用前没有 refresh，旧日期、cwd、Git、rules、Memory index 等上下文可能继续生效。已写入历史的 folded user message 可随同 backend messages 恢复，但项目 folded-memory artifacts 不参与恢复，Session JSON 的 `foldedSessionMemories` 列表也不恢复；保存的 `id`、`model`、`cwd`、`startTime` 等 metadata 同样没有恢复，仍使用新建 Agent 的当前值。图中必须把这些风险标出，不得画成完整恢复路径。
 
 必须区分当前 messages、folded session memory、长期 Memory 和 Skill 的作用域。
 
-权威锚点：`build_system_prompt`、`start_memory_prefetch`、`Agent._run_compression_pipeline`、`Agent.compact`、`Agent._execute_compact_context_tool`、`Agent._check_and_compact`、`Agent._compact_conversation`、`parse_folded_memory`、`fallback_folded_memory`、`save_session`、`save_folded_session_memory`、`Agent.restore_session`。
+权威锚点：`build_system_prompt`、`start_memory_prefetch`、`Agent.chat`、`Agent._run_compression_pipeline`、`Agent.compact`、`Agent._execute_compact_context_tool`、`Agent._check_and_compact`、`Agent._compact_conversation`、`parse_folded_memory`、`fallback_folded_memory`、`save_session`、`save_folded_session_memory`、`get_latest_session_id`、`load_session`、`Agent.restore_session`。
 
 ### 6.6 `06-skill-runtime.mmd`
 
