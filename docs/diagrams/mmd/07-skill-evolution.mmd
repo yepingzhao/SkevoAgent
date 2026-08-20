@@ -13,19 +13,21 @@ config:
 %% Purpose: 展示主 Agent 跨回合 pending window、后台与 /extract_now 入口、候选维护、写入及 provenance 的真实边界。
 %% Audience: both
 %% Sources: agents/agent.py, agents/online_skill_evolution.py, agents/skills.py, agents/skill_evolution.py, agents/main.py
-%% Anchors: Agent.chat, Agent._set_pending_skill_extraction_window, Agent._pop_pending_skill_extraction_window, Agent.extract_now, extract_online_skill_candidate, maintain_online_skill_candidate, online_ingest, record_online_skill_provenance
+%% Anchors: Agent.chat, Agent._set_pending_skill_extraction_window, Agent._pop_pending_skill_extraction_window, Agent.clear_history, Agent.extract_now, extract_online_skill_candidate, maintain_online_skill_candidate, online_ingest, record_online_skill_provenance
 %% Verified: 2026-08-20 against the current Python implementation.
 %% Out of scope: retrieved Skill usage judging/pruning、replay 评测与 Champion promotion。
 
 flowchart TD
     accTitle: 在线 Skill 演化闭环
-    accDescr: 自上而下展示主 Agent 如何在本轮成功回复后建立 pending window，在下一轮开始时消费并追加用户反馈，再于下一轮成功结束后异步提取候选；也展示 extract_now 的即时路径、Manager 规则修正、写权限、add 与 merge 不同的版本审计顺序，以及并非所有早退和写入异常都能形成 provenance 的实现边界
+    accDescr: 自上而下展示主 Agent 如何在本轮成功回复后建立 pending window，在下一轮开始时消费并追加非空用户反馈，再于下一轮成功结束后异步提取候选，或由 clear 命令清空消息与窗口；也展示 extract_now 的即时路径、Manager 规则修正、写权限、add 与 merge 不同的版本审计顺序，以及并非所有早退和写入异常都能形成 provenance 的实现边界
 
     subgraph WINDOW["A · 跨回合 pending window 生命周期"]
         direction TB
         CHAT_START["👤 主 Agent 收到第 N+1 轮输入"]
+        CLEAR_CMD["👤 /clear"]
+        CLEAR_DONE(["clear_history<br/>清空两种 backend 消息历史<br/>与 pending 单槽"])
         POP{"存在第 N 轮 pending window?"}
-        CONSUME["立即取出并清空单槽 pending<br/>追加第 N+1 轮原始 user input 作为 feedback<br/>messages 最多保留 10 条"]
+        CONSUME["立即取出并清空单槽 pending<br/>仅当 N+1 原始 user input.strip() 非空时<br/>才追加为 feedback；messages 最多 10 条"]
         CURRENT_TURN["执行第 N+1 轮 Agent.chat"]
         TURN_OK{"本轮未 aborted?"}
         OLD_READY{"已消费的旧窗口存在?"}
@@ -39,6 +41,7 @@ flowchart TD
         NO_PENDING["不保存本轮窗口<br/>下一轮无该窗口可消费"]
 
         CHAT_START --> POP
+        CLEAR_CMD --> CLEAR_DONE
         POP -->|否| CURRENT_TURN
         POP -->|是：先消费| CONSUME --> CURRENT_TURN
         CURRENT_TURN --> TURN_OK
@@ -78,14 +81,13 @@ flowchart TD
         FIX_RULES["确定性规则修正<br/>exact identity 强制 merge<br/>Manager add 且 top score ≥ 0.55 → merge<br/>merge 缺 target 时尝试 top reference<br/>非法 action → discard"]
         ACTION{"最终 action?"}
         DISCARD["discard"]
-        FAILED["failed<br/>Extractor / Manager / 写调用抛异常"]
-
+        INGEST_FAILED["failed<br/>Extractor / Manager 抛异常"]
         RUN_GATE -->|是| EXTRACTOR
         EXTRACTOR --> CANDIDATE
-        EXTRACTOR -->|调用或解析抛异常| FAILED
+        EXTRACTOR -->|调用或解析抛异常| INGEST_FAILED
         CANDIDATE -->|否| NONE
         CANDIDATE -->|是| REFERENCES --> MANAGER --> FIX_RULES --> ACTION
-        MANAGER -->|调用或解析抛异常| FAILED
+        MANAGER -->|调用或解析抛异常| INGEST_FAILED
         ACTION -->|discard| DISCARD
     end
 
@@ -99,6 +101,7 @@ flowchart TD
         MERGE["merge：evolve_skill target=active<br/>先写旧内容 snapshot<br/>再 patch +1、last-evolved、evolution-count<br/>写回现有 SKILL.md"]
         USAGE["写 usage.jsonl（lifecycle stats 来源）<br/>add → create event；merge → evolve event<br/>成功后 reset discovery cache"]
         NORMAL_ERROR["❌ 正常错误返回仍保留<br/>action = add / merge，ok = false<br/>例如同名已存在或 merge target 缺失"]
+        FAILED["failed<br/>create / evolve / usage 抛异常"]
         PROVENANCE["💾 online provenance 尝试<br/>先追加 online_provenance.jsonl<br/>再按非空 skill 更新 index；merge 成功结果<br/>含 version 并进入 timeline，add 结果不含 version"]
         REFRESH["成功 add / merge 后调用 prompt refresh<br/>默认主 Agent 重建 runtime system prompt<br/>custom system prompt 时为 no-op"]
         AUDIT_GAP["⚠ provenance 写入本身未捕获<br/>log append 失败：无 log/index；index 失败：仅有 log<br/>后台 done callback 吞异常；写成功后不再 refresh<br/>extract_now 会抛出且 pending 不执行后续清空"]
@@ -113,11 +116,15 @@ flowchart TD
         MERGE -->|成功| USAGE
         ADD -->|校验错误，未抛异常| NORMAL_ERROR
         MERGE -->|校验错误，未抛异常| NORMAL_ERROR
+        ADD -->|抛异常| FAILED
+        MERGE -->|抛异常| FAILED
+        USAGE -->|event 写入抛异常| FAILED
         USAGE -->|ok = true| PROVENANCE
         NORMAL_ERROR --> PROVENANCE
         NONE --> PROVENANCE
         DISCARD --> PROVENANCE
         DENIED --> PROVENANCE
+        INGEST_FAILED --> PROVENANCE
         FAILED --> PROVENANCE
         PROVENANCE -->|ok 且 add / merge| REFRESH
         PROVENANCE -->|写 log / index 抛异常| AUDIT_GAP
@@ -135,14 +142,14 @@ flowchart TD
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
     classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
-    class CHAT_START actor
+    class CHAT_START,CLEAR_CMD actor
     class CONSUME,CURRENT_TURN,READY,CLOSED,TASK_STARTED,SET_PENDING,BACKGROUND,EXTRACT_NOW,ADD,MERGE,USAGE,REFRESH runtime
     class EXTRACTOR,MANAGER model
-    class REFERENCES,PROVENANCE state
+    class CLEAR_DONE,REFERENCES,PROVENANCE state
     class POP,TURN_OK,OLD_READY,NEW_WINDOW,SCHEDULE_GATE,HAS_MANUAL,RUN_GATE,CANDIDATE,ACTION,CONFIRM,WRITE_KIND control
     class NONE,DISCARD,FIX_RULES extension
     class POLICY,SILENT_RETURN,NO_PENDING note
-    class LOST,MANUAL_NONE,FAILED,DENIED,NORMAL_ERROR,AUDIT_GAP error
+    class LOST,MANUAL_NONE,INGEST_FAILED,FAILED,DENIED,NORMAL_ERROR,AUDIT_GAP error
 
     style WINDOW fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     style ENTRY fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
