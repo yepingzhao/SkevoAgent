@@ -303,19 +303,21 @@ Manager 同时接收：通过 normalized name/description/when-to-use 得到的 
 ### 6.8 `08-skill-evaluation.mmd`
 
 图内标题：Skill 评测、候选比较与 Champion 晋升
-图型：`flowchart LR`
+图型：`flowchart TB`，由五个业务 cluster 组成：入口与 lineage、replay、baseline 与 lifecycle、variants、artifacts 与 Champion。
 读者：维护者及自进化机制研究者
 目的：展示评测数据如何进入状态 gate 和 champion promotion gate。
 
 输入：online provenance、provenance index、usage stats、lifecycle stats、active Skill snapshot。
 
-流水线：稳定 lineage ID；构建并冻结 replay pool；划分 `mutate_dev` 和 `promotion_test`；编译确定性规则和可选 LLM judge；生成 heuristic/LLM variants；在 mutate-dev 上选择候选；在 promotion-test 上重新评估。
+流水线：以 Skill name 生成稳定 lineage ID；从 log/index source 去重 replay；`write_artifacts=true` 时合并并覆写 frozen pool，`false` 时只在内存分片；少于两条 replay 时全部进入 `mutate_dev`，否则按稳定 hash 约 75/25 划分并保证 `mutate_dev`、`promotion_test` 均非空。编译确定性规则和仅在 side query 可用时加入的 LLM binary rules，先以全部 replay 的历史 latest assistant 评估 current active，再生成 heuristic/LLM variants；所有 variants 只在 `mutate_dev` 上竞争，唯一 winner 才在 `promotion_test` 上重新评估。side query 缺失或没有 replay 时 candidate bundle 为空。
 
-状态 gate：`unobserved`、`incubating`、`watch`、`healthy`、`pruned`。
+状态 gate 按实现顺序判断：`pruned` → `unobserved` → `incubating` → `watch` → `healthy`。默认阈值为 replay ≥ 2、promotion test ≥ 1、retrieved ≥ 5、rule pass ≥ 0.80、relevance ≥ 0.35、used ≥ 0.20，Python API 可覆盖。
 
-Promotion gate：非 healthy 不晋升；首个健康候选可成为 champion；后续候选需要达到 `min_score_delta` 且不增加 hard failures；结果为 `active_champion` 或 `rejected`。
+Promotion candidate 的 dev pre-gate、candidate 选择、Champion load 和 `_promotion_decision` 都位于 `_persist_eval_artifacts` 内，因此只在 `write_artifacts=true` 时执行。pre-gate 只有在 bundle 同时含 best variant 和 promotion-test summary，且 best-dev score 至少比 current active 的全 replay score 高 0.01、hard failures 不增加时，才选择 winner snapshot 与 promotion-test summary；否则以 current active snapshot 与全 replay summary 参加 Champion gate。
 
-产物：frozen dataset、eval spec、run artifacts、report、champion registry、champion JSON 和独立 champion `SKILL.md`。Champion 不覆盖 active Skill。
+Promotion gate：`unobserved`、`incubating`、`pruned` 不晋升且保留原 status；`watch` 返回 `rejected`；首个 `healthy` candidate 成为 `active_champion`；已有 Champion 时，candidate 需要达到 `min_score_delta=0.01` 且不增加 hard failures，否则为 `rejected`。
+
+产物按顺序包括 frozen dataset、eval spec、outputs、judgments、run summary、可选 report，以及仅晋升时写入的 champion registry、champion JSON 和独立 champion `SKILL.md`。Champion 不覆盖 active Skill。`write_artifacts=false` 会跳过 `_persist_eval_artifacts`、dev pre-gate、promotion decision 和 Champion 读写，但 `write_report` 独立。dataset、run artifacts、Champion files、run summary 和 report 的写异常均未统一捕获，异常向上抛出且可能留下非事务的部分产物。
 
 权威锚点：`_build_replay_pool`、`_assign_replay_splits`、`_compile_eval_rules`、`_build_candidate_eval_bundle_async`、`_skill_status`、`_promotion_decision`、`_persist_eval_artifacts`、`_set_champion`。
 

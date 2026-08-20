@@ -1104,79 +1104,178 @@ title: Skill 评测、候选比较与 Champion 晋升
 config:
   theme: base
   look: classic
+  layout: elk
+  elk:
+    mergeEdges: true
+    nodePlacementStrategy: NETWORK_SIMPLEX
   flowchart:
-    curve: basis
+    curve: linear
+    nodeSpacing: 24
+    rankSpacing: 32
+    wrappingWidth: 150
 ---
-%% Purpose: 展示评测数据如何进入 lifecycle status gate 和 Champion promotion gate。
+%% Purpose: 展示在线 Skill 数据如何形成 replay、进入独立的 lifecycle status gate 与 Champion promotion gate，并按真实顺序持久化评测产物。
 %% Audience: maintainer
-%% Sources: agents/online_skill_eval.py, agents/skill_evolution.py
-%% Anchors: _build_replay_pool, _assign_replay_splits, _compile_eval_rules, _build_candidate_eval_bundle_async, _skill_status, _promotion_decision, _persist_eval_artifacts
-%% Out of scope: 在线候选提取和 Skill 执行。
+%% Sources: agents/online_skill_eval.py, agents/skill_evolution.py, agents/main.py, agents/agent.py
+%% Anchors: _lineage_id_for_skill, _build_replay_pool, _assign_replay_splits, _compile_eval_rules, _build_candidate_eval_bundle_async, _skill_status, _promotion_decision, _persist_eval_artifacts, _set_champion, format_online_skill_eval_async
+%% Verified: 2026-08-20 against the current Python implementation.
+%% Symbols: 👤 entry；💾 persistent state；◇ model side query；⚙ evaluation；✓ promoted；❌ rejected；⚠ failure boundary。
+%% Out of scope: 在线候选提取与 add / merge、Skill 运行时调用、usage judgment 如何产生。
 
-flowchart LR
-    INPUTS["评测输入<br/>provenance / usage / lifecycle<br/>active Skill snapshot"]
-    LINEAGE["稳定 lineage ID"]
-    REPLAY["构建并冻结 replay pool"]
-    SPLIT["mutate_dev / promotion_test"]
-    RULES["确定性规则<br/>+ 可选 LLM binary judge"]
-    VARIANTS["heuristic variants<br/>+ 可选 LLM variant"]
-    DEV["mutate_dev 生成与评估"]
-    BEST["选择最佳候选"]
-    TEST["promotion_test 独立评估"]
-    STATUS{"lifecycle status gate"}
-    NOT_HEALTHY["unobserved / incubating<br/>watch / pruned"]
-    HEALTHY["healthy"]
-    CHAMPION{"已有 Champion?"}
-    FIRST["首个健康候选"]
-    BEAT{"平均分提升 ≥ min_score_delta<br/>且 hard failures 不增加?"}
-    PROMOTE["active_champion"]
-    REJECT["rejected"]
-    ARTIFACTS[("💾 dataset / eval spec / runs / report<br/>champion registry / JSON / SKILL.md")]
-    NOTE["Champion 不覆盖 active Skill"]
+flowchart TB
+    accTitle: Skill 评测、候选比较与 Champion 晋升
+    accDescr: 五个阶段依次展示评测入口与稳定 lineage、replay 去重冻结与分片、当前 active 基线规则和 lifecycle 状态、可选 variants 的 mutate dev 选择与 promotion test 隔离，以及仅在 write artifacts 开启后执行的 dev pre-gate、promotion candidate 选择、Champion gate 和非事务产物写入；所有写入异常汇入同一个向上抛出的失败终点
 
-    INPUTS --> LINEAGE --> REPLAY --> SPLIT
-    SPLIT --> RULES
-    SPLIT --> VARIANTS
-    RULES --> DEV
-    VARIANTS --> DEV --> BEST --> TEST --> STATUS
-    STATUS -->|非 healthy| NOT_HEALTHY --> REJECT
-    STATUS -->|healthy| HEALTHY --> CHAMPION
-    CHAMPION -->|否| FIRST --> PROMOTE
-    CHAMPION -->|是| BEAT
-    BEAT -->|是| PROMOTE
-    BEAT -->|否| REJECT
-    PROMOTE --> ARTIFACTS
-    REJECT --> ARTIFACTS
-    ARTIFACTS -.-> NOTE
+    subgraph ENTRY_LINEAGE["A · 入口、输入与稳定 lineage"]
+        direction LR
+        ENTRY["👤 /skill-eval 或 Python API<br/>REPL 写入默认开启，当前无 dry-run CLI<br/>API 可传 side_query = None<br/>或 write_artifacts = False"]
+        INPUTS["输入并集<br/>provenance log / index<br/>usage / lifecycle stats<br/>active Skill snapshots"]
+        SKILL_SET["按所有输入 key 建立 Skill 集<br/>active 缺失时以 lineage / lifecycle<br/>补 name、description；instructions 为空"]
+        LINEAGE["稳定 lineage ID<br/>仅对去首尾空白的 Skill name 做 SHA-1<br/>skill-&lt;16 hex&gt;"]
 
+        ENTRY --> INPUTS --> SKILL_SET --> LINEAGE
+    end
+
+    subgraph REPLAY["B · replay pool、冻结与稳定 split"]
+        direction LR
+        POOL["构建 replay pool<br/>仅取非空 user / assistant messages 且必须有 user<br/>ID = hash(skill + messages + latest user)<br/>log 与 index source 按 ID 去重"]
+        FREEZE{"write_artifacts?"}
+        FROZEN["💾 合并既有 replay_pool.jsonl<br/>同 ID 更新，全量重排并重新 split<br/>成功后覆写 frozen dataset"]
+        EPHEMERAL["仅对当前来源内存分片<br/>不读取或写入 frozen dataset"]
+        SPLIT["split 默认规则<br/>&lt; 2 条：全部 mutate_dev，无 test<br/>≥ 2 条：hash 约 75 / 25<br/>并强制 dev / test 各至少 1 条"]
+
+        LINEAGE --> POOL --> FREEZE
+        FREEZE -->|是| FROZEN
+        FREEZE -->|否| EPHEMERAL
+        FROZEN -->|写成功| SPLIT
+        EPHEMERAL --> SPLIT
+    end
+
+    subgraph BASELINE["C · current_active 规则评测与 lifecycle status"]
+        direction LR
+        RULES["编译最多 8 条规则<br/>始终含 hard non-empty；再按 Skill 文本加入<br/>引用 / 段数 / JSON 等 programmatic rules<br/>有 side_query 才加入 LLM binary rules"]
+        CURRENT["⚙ current_active 基线<br/>在全部 replay 的历史 latest assistant 上判定<br/>LLM judge 异常按 fail 记录"]
+        STATUS{"lifecycle gate<br/>默认值；Python API 可覆盖<br/>replay ≥ 2，test ≥ 1，retrieved ≥ 5<br/>pass ≥ .80，relevance ≥ .35，used ≥ .20"}
+        STATUS_MAP["固定判定顺序<br/>pruned → unobserved → incubating<br/>→ watch → healthy<br/>先命中即返回"]
+
+        SKILL_SET --> RULES
+        SPLIT --> CURRENT
+        RULES --> CURRENT --> STATUS --> STATUS_MAP
+        INPUTS -->|usage 与 pruned 信号| STATUS
+    end
+
+    subgraph VARIANT_EVAL["D · variants、mutate_dev 选择与 promotion_test 隔离"]
+        direction LR
+        SIDE_GATE{"side_query 可用<br/>且 replay 非空?"}
+        EMPTY_BUNDLE["candidate_bundle = {}<br/>无 variants、dev winner 或 test summary"]
+        VARIANTS["◇ 生成候选<br/>失败规则 → heuristic guards<br/>无失败 → 最多 2 条 non-programmatic rules<br/>有真实失败才尝试 LLM mutation<br/>失败 mutation 忽略；按 instructions 去重，最多 4 个"]
+        DEV["⚙ 仅在 mutate_dev 生成并评估全部 variants<br/>生成异常转 candidate_response_failed 文本<br/>按 average score 降序、hard failures 升序"]
+        WINNER{"产生 dev winner?"}
+        TEST_GATE{"存在 promotion_test?"}
+        TEST["⚙ 仅对 dev winner<br/>在 promotion_test 重新生成与评估"]
+        BUNDLE["输出 candidate_bundle<br/>best_dev_summary 始终来自 dev<br/>best_test_summary 仅在有 test 时存在<br/>此阶段尚未选择 promotion candidate"]
+
+        CURRENT --> SIDE_GATE
+        SIDE_GATE -->|否| EMPTY_BUNDLE
+        SIDE_GATE -->|是| VARIANTS --> DEV --> WINNER
+        WINNER -->|否| EMPTY_BUNDLE
+        WINNER -->|是| TEST_GATE
+        TEST_GATE -->|否| BUNDLE
+        TEST_GATE -->|是| TEST --> BUNDLE
+    end
+
+    subgraph ARTIFACTS["E · artifacts、promotion candidate、Champion 与 report"]
+        direction TB
+        PERSIST{"write_artifacts?"}
+        NO_ARTIFACTS["跳过 _persist_eval_artifacts<br/>不写 eval / run，不执行 dev pre-gate<br/>不读取或修改 Champion；artifacts = {}"]
+        RUN_FILES["💾 按序写成功<br/>eval_spec.json → outputs.jsonl → judgments.jsonl<br/>包含 current_active 与可用 variant 结果"]
+        DEV_PRE{"bundle 同时有 best variant 与 test summary<br/>且 best_dev score ≥ current 全 replay score + .01<br/>且 hard failures 不增加?"}
+        CANDIDATE["仅在此选择 promotion candidate<br/>dev pre-gate 失败：current snapshot + 全 replay summary<br/>通过：winner snapshot + promotion_test summary"]
+        LOAD_CHAMPION["读取 lineage Champion<br/>随后调用 _promotion_decision"]
+        CHAMP_GATE{"lifecycle status?"}
+        NON_HEALTHY["非 healthy 结果<br/>unobserved / incubating / pruned：保留原 status<br/>watch：rejected"]
+        HAS_CHAMPION{"healthy 且已有<br/>Champion summary?"}
+        BEAT{"candidate score ≥ Champion + .01<br/>且 hard failures 不增加?"}
+        REJECT["❌ rejected"]
+        PROMOTE["✓ active_champion"]
+        CHAMPION_FILES["💾 仅晋升时按序写成功<br/>champions.json registry → champion.json<br/>→ 独立 champion SKILL.md<br/>不会覆盖 active Skill"]
+        RUN_SUMMARY["💾 所有 status 均写成功<br/>run summary.json"]
+        REPORT_GATE{"write_report?"}
+        REPORT["💾 全部 Skills 完成后写成功<br/>online_eval_report.json"]
+        RETURN["返回 report / 格式化终端输出"]
+        WRITE_FAILURE(["⚠ 写入异常向上抛出<br/>写入非事务且无统一保护<br/>可能留下部分产物"])
+
+        STATUS_MAP --> PERSIST
+        EMPTY_BUNDLE --> PERSIST
+        BUNDLE --> PERSIST
+        PERSIST -->|否| NO_ARTIFACTS --> REPORT_GATE
+        PERSIST -->|是| RUN_FILES
+        RUN_FILES -->|写成功| DEV_PRE
+        DEV_PRE -->|否：current / 全 replay| CANDIDATE
+        DEV_PRE -->|是：winner / test| CANDIDATE
+        CANDIDATE --> LOAD_CHAMPION
+        LOAD_CHAMPION --> CHAMP_GATE
+        CHAMP_GATE -->|unobserved / incubating / pruned| NON_HEALTHY
+        CHAMP_GATE -->|watch| NON_HEALTHY
+        NON_HEALTHY --> RUN_SUMMARY
+        CHAMP_GATE -->|healthy| HAS_CHAMPION
+        HAS_CHAMPION -->|否：首个 healthy，不比分| PROMOTE
+        HAS_CHAMPION -->|是| BEAT
+        BEAT -->|否| REJECT --> RUN_SUMMARY
+        BEAT -->|是| PROMOTE
+        PROMOTE --> CHAMPION_FILES
+        CHAMPION_FILES -->|写成功| RUN_SUMMARY
+        RUN_SUMMARY -->|写成功| REPORT_GATE
+        REPORT_GATE -->|否| RETURN
+        REPORT_GATE -->|是| REPORT -->|写成功| RETURN
+
+        RUN_FILES -->|写入异常| WRITE_FAILURE
+        CHAMPION_FILES -->|写入异常| WRITE_FAILURE
+        RUN_SUMMARY -->|写入异常| WRITE_FAILURE
+        REPORT -->|写入异常| WRITE_FAILURE
+    end
+
+    FROZEN -->|写入异常| WRITE_FAILURE
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
     classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
     classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
     classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
-    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
-    class INPUTS,LINEAGE,REPLAY,SPLIT,RULES,VARIANTS,DEV,BEST,TEST runtime
-    class ARTIFACTS state
-    class STATUS,CHAMPION,BEAT control
-    class HEALTHY,FIRST,PROMOTE extension
-    class NOT_HEALTHY,REJECT error
-    class NOTE note
+    class ENTRY actor
+    class INPUTS,SKILL_SET,LINEAGE,POOL,EPHEMERAL,SPLIT,CURRENT,EMPTY_BUNDLE,DEV,BUNDLE,NO_ARTIFACTS,CANDIDATE,LOAD_CHAMPION,RETURN runtime
+    class VARIANTS model
+    class FROZEN,RUN_FILES,CHAMPION_FILES,RUN_SUMMARY,REPORT state
+    class FREEZE,STATUS,SIDE_GATE,WINNER,TEST_GATE,PERSIST,DEV_PRE,CHAMP_GATE,HAS_CHAMPION,BEAT,REPORT_GATE control
+    class RULES,STATUS_MAP,TEST,PROMOTE extension
+    class NON_HEALTHY note
+    class REJECT,WRITE_FAILURE error
+
+    style ENTRY_LINEAGE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style REPLAY fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
+    style BASELINE fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style VARIANT_EVAL fill:#FAF7FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    style ARTIFACTS fill:#FFFDF5,stroke:#A15C00,stroke-width:2px,color:#3A2600
 ```
 
 - [ ] **Step 2: Validate and render**
 
 ```bash
 mmdc -i docs/diagrams/mmd/08-skill-evaluation.mmd -o /tmp/08-skill-evaluation.svg -b white
+mmdc -i docs/diagrams/mmd/08-skill-evaluation.mmd -o /tmp/08-skill-evaluation-800@2x.png -b white -w 800 -s 2
 ```
 
-Expected: exit code 0; mutate-dev selection and promotion-test evaluation are visibly separate; rejected and promoted paths both persist artifacts.
+Expected: both commands exit 0; SVG includes `accTitle`/`accDescr` ARIA metadata and has an intrinsic width no greater than about 1050 px. Confirm exactly five business stages are visible; `mutate_dev` selects the only winner before independent `promotion_test`; the dev pre-gate and promotion-candidate selection occur only after `write_artifacts=true`; lifecycle and Champion gates remain distinct; default/API-overridable thresholds are legible; `unobserved`/`incubating`/`pruned` retain their status while `watch` becomes `rejected`; frozen dataset, run artifacts, Champion files, run summary and report each have a solid failure edge to the shared exception terminal. Inspect the SVG and 2x/800 PNG for clipping, overlap, edge crossings through nodes and readable body text. Verify the Mermaid block in this Task 8 section is byte-for-byte identical to `docs/diagrams/mmd/08-skill-evaluation.mmd`, then run `git diff --check`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/diagrams/mmd/08-skill-evaluation.mmd
-git commit -m "docs: add Skill evaluation and promotion diagram"
+git add docs/diagrams/mmd/08-skill-evaluation.mmd docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md docs/superpowers/plans/2026-08-20-skevo-mermaid-diagram-suite.md
+git commit -m "docs: align Skill evaluation with runtime"
 ```
 
 ### Task 9: Create the MCP and sub-agent boundaries diagram
