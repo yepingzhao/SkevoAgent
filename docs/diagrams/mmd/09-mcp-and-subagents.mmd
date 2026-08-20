@@ -3,13 +3,19 @@ title: MCP 进程边界与子 Agent 上下文边界
 config:
   theme: base
   themeVariables:
-    fontSize: 14px
+    fontSize: 17px
   look: classic
+  layout: elk
+  elk:
+    mergeEdges: true
+    nodePlacementStrategy: SIMPLE
+    cycleBreakingStrategy: GREEDY
+    considerModelOrder: NODES_AND_EDGES
   flowchart:
     curve: linear
-    nodeSpacing: 24
-    rankSpacing: 30
-    wrappingWidth: 155
+    nodeSpacing: 16
+    rankSpacing: 28
+    wrappingWidth: 135
 ---
 %% Purpose: 展示共享的主 Agent Runtime 如何跨越 MCP OS 子进程边界，并在同一 Skevo 进程内创建独立的子 Agent 上下文。
 %% Audience: maintainer
@@ -30,17 +36,17 @@ flowchart TB
 
         subgraph MCP_CLIENT["Skevo 主进程：McpManager / McpConnection Client"]
             direction TB
-            CONFIG["💾 配置覆盖<br/>有效 user settings → project settings → project .mcp.json<br/>后者按同名 server 覆盖"]
+            CONFIG["💾 配置覆盖（后者同名覆盖）<br/>~/.skevo/settings.json<br/>→ &lt;cwd&gt;/.skevo/settings.json<br/>→ &lt;cwd&gt;/.mcp.json<br/>无效配置或读取 / JSON 错误静默跳过"]
             LAZY["仅主 Agent 首次 chat<br/>先置 _mcp_initialized = True<br/>再 await MCP lazy load"]
             MANAGER["🔌 主进程内 McpManager<br/>先置 _connected = True<br/>再按 server 顺序连接"]
-            HANDSHAKE["McpConnection 握手<br/>向 PROCESS stdin 发 initialize<br/>→ initialized notification → tools/list<br/>两个 request 各最多 15 s<br/>response 同由 reader 按 id 唤醒"]
+            HANDSHAKE["McpConnection 握手<br/>向 PROCESS stdin 发 initialize<br/>protocolVersion 2024-11-05<br/>→ notifications/initialized<br/>→ tools/list<br/>initialize / list 各最多 15 s<br/>response 同由 reader 按 id 唤醒"]
             READER["stdout 后台 reader task<br/>持续读取 PROCESS stdout<br/>解析 JSON-RPC response id"]
             CALL["向 PROCESS stdin 发 tools/call<br/>await pending Future<br/>{name, arguments}"]
             DEFINITIONS["💾 握手成功后生成 definitions<br/>mcp__server__tool<br/>追加当前主 Agent self.tools"]
             INIT_FAIL["❌ 单 server 启动 / 初始化 / 发现失败<br/>关闭该 connection；继续其他 server<br/>不阻断主 chat"]
             MCP_DISPATCH["🔌 MCP 调用路由<br/>解析 mcp__server__tool<br/>查找已登记 connection"]
             MCP_RETURN["返回主 Runtime 的 tool result<br/>content text blocks 拼接；否则 JSON"]
-            MCP_RISK["⚠ manager 与调用期风险<br/>load 前即置 _connected = True，失败后续 chat 不自动重试<br/>成功进程持续到 disconnect_all 或宿主退出<br/>disconnect_all 重置 manager，但不重置 Agent flag；Agent 未自动调用<br/>未连接 / JSON-RPC / transport error 会抛出；tools/call 无 timeout<br/>Anthropic 转为 tool error 文本；OpenAI 可能终止当前 loop"]
+            MCP_RISK["⚠ manager / transport 风险<br/>1. load 前置 _connected = True；失败后续 chat 不重试<br/>disconnect_all 不重置 Agent flag，Agent 也未自动调用<br/>2. 未连接 / JSON-RPC error / write 或 drain 异常向上抛<br/>Anthropic 转 tool error；OpenAI 可能终止 loop<br/>3. stdout EOF 直接 break，不 fail pending Future<br/>4. _send_request 先 write / drain，后登记 Future<br/>极快 response 可能在登记前被丢弃<br/>5. 运行期 tools/call 无 timeout<br/>EOF / 登记竞态可导致永久等待"]
 
             CONFIG --> MANAGER
             LAZY --> MANAGER
@@ -53,6 +59,7 @@ flowchart TB
             CALL -->|content / result| MCP_RETURN
 
             %% Layout-only invisible links：收窄主进程 Client，不表达握手、reader 和 dispatch 的时序。
+            CONFIG ~~~ LAZY
             HANDSHAKE ~~~ READER
             DEFINITIONS ~~~ MCP_DISPATCH
         end
@@ -78,11 +85,11 @@ flowchart TB
         CHILD["◎ 同进程内新 Agent 实例<br/>独立 system prompt / messages / session id / Agent Loop<br/>model 名称沿用父 Agent"]
         PERMISSION["权限初始化<br/>父 mode = plan → 子 mode = plan<br/>并生成专属 plan path / prompt<br/>否则一律 bypassPermissions"]
         ISOLATION["is_sub_agent = True 禁用主生命周期<br/>无 Skill 检索 / pending window / Memory prefetch<br/>无 MCP lazy load / usage tracking / 在线演化<br/>无 Session auto-save"]
-        AWAIT["父 Agent await run_once<br/>agent / skill 不是 concurrency-safe tools<br/>同批多个派生调用按顺序执行，不在后台运行"]
+        AWAIT["父 Agent await run_once<br/>agent / skill 不是 concurrency-safe tools<br/>不在后台；Anthropic 逐项执行<br/>OpenAI 同批语义见风险 4"]
         CHILD_RESULT["成功：返回最终文本或空输出占位<br/>父 Agent 累加 input / output token 增量"]
         CHILD_FAIL["❌ run_once 异常转为错误文本<br/>Sub-agent error / Skill fork error<br/>异常前已消耗 token 不回计父 Agent"]
 
-        SUB_RISK["⚠ 当前实现边界风险<br/>1. 白名单过滤为空时，custom_tools or tool_definitions 回退全部默认 tools<br/>并重新包含 agent，递归派生保护失效<br/>2. 仅 Skill fork 可选入父 MCP definition；子 McpManager 未连接<br/>definition ≠ 可用 connection<br/>3. OpenAI 仅显式复制 api_base；Anthropic 不复制 custom base<br/>两者均不显式复制 api_key，仍依赖 SDK 环境变量"]
+        SUB_RISK["⚠ 当前实现边界风险<br/>1. 白名单过滤为空时<br/>custom_tools or tool_definitions 回退全部默认 tools<br/>并重新包含 agent，递归派生保护失效<br/>2. 仅 Skill fork 可选入父 MCP definition<br/>子 McpManager 未连接；definition ≠ connection<br/>3. OpenAI 仅复制 api_base；Anthropic 不复制 custom base<br/>两者均不显式复制 api_key，仍依赖 SDK 环境变量<br/>4. OpenAI 的 oai_checked 在 for tc 内累积<br/>每次都重建 batch 并重跑当前列表<br/>同批较早的 agent / Skill fork 可能重复执行"]
 
         ENTRY -->|agent tool| TYPE_CONFIG --> AGENT_TOOLS --> CHILD
         ENTRY -->|Skill fork| SKILL_CONFIG --> SKILL_TOOLS --> CHILD
@@ -90,11 +97,19 @@ flowchart TB
         AWAIT -->|成功| CHILD_RESULT
         AWAIT -->|异常| CHILD_FAIL
 
+        %% Layout-only invisible links：收窄子 Agent 分支，不表达 agent tool 与 Skill fork 的时序。
+        AGENT_TOOLS ~~~ SKILL_CONFIG
+        CHILD_RESULT ~~~ CHILD_FAIL
+
     end
 
     RUNTIME -->|首次主 chat| LAZY
     RUNTIME -->|获准的 mcp__server__tool| MCP_DISPATCH
     RUNTIME -->|agent tool / Skill fork| ENTRY
+    DEFINITIONS -->|成功发现：追加 self.tools| RUNTIME
+    MCP_RETURN -->|tool result| RUNTIME
+    CHILD_RESULT -->|文本 + token 增量| RUNTIME
+    CHILD_FAIL -->|错误文本| RUNTIME
 
     %% Layout-only invisible links：风险注记不伪装成控制流，并保持 A、B 边界纵向分区。
     DEFINITIONS ~~~ MCP_RETURN

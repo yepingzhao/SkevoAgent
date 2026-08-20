@@ -331,12 +331,12 @@ Promotion gate：`unobserved`、`incubating`、`pruned` 不晋升且保留原 st
 MCP 侧：
 
 - `McpManager` 和 `McpConnection` 都位于 Skevo 主进程；握手次序、stdout reader task、pending Future、definition 生成、dispatch 和 result 转换也都是主进程 Client 责任。只有每个 MCP Server `PROCESS` 是独立 OS 子进程，外部进程子图不得包含上述 Client 组件。
-- 配置按用户级 `~/.skevo/settings.json` → 项目级 `.skevo/settings.json` → 项目 `.mcp.json` 读取；只有含 `command` 的有效 server 对象参与合并，后者按同名 server 覆盖前者，无效文件或配置静默跳过。
+- 配置按用户级 `~/.skevo/settings.json` → 项目级 `<cwd>/.skevo/settings.json` → 项目 `<cwd>/.mcp.json` 读取；只有含 `command` 的有效 server 对象参与合并，后者按同名 server 覆盖前者，无效配置以及文件读取或 JSON 解析错误均静默跳过。
 - 仅主 Agent 首次 `chat` 尝试懒加载。`Agent._mcp_initialized` 和 manager `_connected` 都在实际连接前设置；因此初始化失败后的后续 `chat` 不会自动重试。
-- 每个 server 通过 `create_subprocess_exec` 启动 stdio 子进程；主进程 Client 的 stdout reader 后台任务持续读取子进程 stdout，再按 JSON-RPC response id 完成对应 pending Future；因此 response 分发虚线的方向必须为 reader → waiting call。初始化顺序为 awaited `initialize` request → `notifications/initialized` notification → awaited `tools/list` request，`initialize` 和 `tools/list` 各自最多等待 15 秒，它们的 response 同样由 reader 唤醒。
+- 每个 server 通过 `create_subprocess_exec` 启动 stdio 子进程；主进程 Client 的 stdout reader 后台任务持续读取子进程 stdout，再按 JSON-RPC response id 完成对应 pending Future；因此 response 分发虚线的方向必须为 reader → waiting call。初始化顺序为 awaited `initialize` request（`protocolVersion = 2024-11-05`）→ `notifications/initialized` notification → awaited `tools/list` request，`initialize` 和 `tools/list` 各自最多等待 15 秒，它们的 response 同样由 reader 唤醒。
 - 只有握手和工具发现都成功的 connection 才登记；definition 包装为 `mcp__server__tool` 并追加到当前主 Agent `self.tools`。`tools/call` 依赖已登记 connection，标准 content list 只拼接 text blocks，其他 result 转 JSON 字符串。
 - 单 server 启动、初始化或发现失败时只关闭该 connection，继续其他 server 且不阻断主对话。成功子进程持续到 `disconnect_all` 或宿主退出；`disconnect_all` 关闭全部 connection、清空 definitions 并重置 manager `_connected`，但不重置 `Agent._mcp_initialized`，且当前 `Agent` 没有自动调用该 teardown。
-- 调用期的未连接、JSON-RPC 或 transport 异常会向上抛出，`tools/call` 没有 timeout：Anthropic 工具路径会把异常转成 tool error 文本，OpenAI 执行路径则可能终止当前 Agent Loop。
+- 调用期的未连接、JSON-RPC error 以及部分 stdin `write` / `drain` 异常会向上抛出：Anthropic 工具路径会把异常转成 tool error 文本，OpenAI 执行路径则可能终止当前 Agent Loop。stdout EOF 时 `_read_loop` 直接 `break`，不会 fail 已有 pending Future；`_send_request` 又是先 `write` / `drain`、后登记 Future，极快 response 可能在 `_pending` 登记前被 reader 忽略。运行期 `tools/call` 没有 timeout，因此 EOF 或登记竞态可导致永久等待；初始化阶段的 `initialize` / `tools/list` 则有外层 15 秒 `wait_for`。
 
 子 Agent 侧：
 
@@ -346,13 +346,16 @@ MCP 侧：
 - Skill fork 把 Skill prompt 作为新 Agent base system，把 args 或默认任务作为新 user message。有真值 `allowed_tools` 时按名称过滤父 Agent 当前 `self.tools`，否则使用父 tools 中除 `agent` 外的集合；因此只有 Skill fork 可以把父 MCP definitions 选入子 Agent。
 - 新 Agent 与父 Agent 位于同一 OS 进程，但拥有独立 system prompt、messages、session id 和 Agent Loop，并沿用父 Agent 的 model 名称。父 Agent 为 Plan Mode 时，子 Agent 使用 `plan` 权限并生成自己的 plan path / prompt；否则一律使用 `bypassPermissions`。
 - `is_sub_agent=True` 禁用 Skill 检索增强、pending extraction window、Memory prefetch、MCP 懒加载、usage tracking、在线演化和 Session auto-save；子 Agent 仍使用自己的 Agent Loop 和获授的工具。
-- 父 Agent awaited `run_once`；`agent` 和 `skill` 不在 `CONCURRENCY_SAFE_TOOLS` 中，因此同批多个派生调用按顺序执行，不是后台任务。成功时只把最终文本和 input / output token 增量回传父 Agent；异常转为 `Sub-agent error` 或 `Skill fork error` 文本，且异常前子 Agent 已消耗 token 当前不回计父 Agent。
+- 父 Agent awaited `run_once`；`agent` 和 `skill` 不在 `CONCURRENCY_SAFE_TOOLS` 中，因此不是后台任务，Anthropic 路径逐项执行。成功时只把最终文本和 input / output token 增量回传父 Agent；异常转为 `Sub-agent error` 或 `Skill fork error` 文本，且异常前子 Agent 已消耗 token 当前不回计父 Agent。
 
 必须标记的实现风险：
 
 - 子 Agent 工具白名单无命中或解析为空时，过滤结果 `[]` 传入 `Agent`，但 `self.tools = custom_tools or tool_definitions` 会回退全部默认 tools，并重新包含 `agent`；因此“阻止递归派生”不是无条件保证。
 - Skill fork 可以继承父 Agent 的 MCP tool definition，但新 `McpManager` 在 `is_sub_agent=True` 时不连接；definition 不等于可用 connection。
 - 子 Agent 的 model Client 配置未完整继承：OpenAI 路径只显式复制 `api_base`，Anthropic 路径不复制 custom base URL，两者都没有显式复制父 Agent `api_key`，实际还依赖对应 SDK 环境变量。
+- OpenAI 路径的 `oai_checked` 在 `for tc in tool_calls` 内累积，而 batch 构建与执行也位于该循环内；每处理一个新 tool call 都会重建 batch 并重跑当前整个 `oai_checked` 列表。因此同一 assistant message 含多个 `agent` 或 Skill fork 时，较早的派生调用可能重复执行，不能只画成“顺序一次”。
+
+图中必须使用实线表达四条回到共享主 Runtime 的闭环：MCP definitions 成功发现后追加 `self.tools`、MCP result 回传 tool result、子 Agent 成功时回传文本与 token 增量、子 Agent 异常时回传错误文本。返回边不得用虚线，且不得穿过业务节点。
 
 权威锚点：`McpConnection.connect`、`McpConnection.initialize`、`McpConnection.list_tools`、`McpConnection.call_tool`、`McpConnection.close`、`McpManager.load_and_connect`、`McpManager.get_tool_definitions`、`McpManager.call_tool`、`McpManager.disconnect_all`、`get_sub_agent_config`、`Agent.chat`、`Agent.run_once`、`Agent._execute_agent_tool`、`Agent._execute_skill_tool`。
 
