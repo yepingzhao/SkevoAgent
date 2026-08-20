@@ -766,7 +766,7 @@ flowchart TD
 
     subgraph DISCOVERY["A · 发现、解析与进程内缓存"]
         direction TB
-        ROOTS["💾 用户级 ~/.skevo/skills/*/SKILL.md 先加载<br/>💾 项目级 &lt;cwd&gt;/.skevo/skills/*/SKILL.md 后加载"]
+        ROOTS["💾 Skill 根目录<br/>用户级 ~/.skevo/skills 先加载<br/>项目级 .skevo/skills 后加载"]
         CACHE["首次 discover：扫描目录型 SKILL.md<br/>frontmatter + 正文 → SkillDefinition<br/>解析失败静默忽略；用户级同名优先<br/>结果写入进程内 cache，后续复用"]
         REFRESH["重启，或 create / evolve / prune<br/>成功后显式 reset"]
 
@@ -820,7 +820,7 @@ flowchart TD
 
     subgraph EXECUTION["C · 真正调用与执行"]
         direction TB
-        EXECUTE{"模型 tool：Agent._execute_skill_tool<br/>两条入口共同进入 execute_skill<br/>同步按 name 查找；Skill 存在?"}
+        EXECUTE{"execute_skill<br/>同步按 name 查找<br/>Skill 存在？"}
         UNKNOWN["❌ tool result：Unknown skill: &lt;name&gt;"]
         PREPARE["先写 invocation stats 到 usage.jsonl<br/>再替换 $ARGUMENTS / ${ARGUMENTS}<br/>与 ${CLAUDE_SKILL_DIR}"]
         MODE{"context mode"}
@@ -863,8 +863,8 @@ flowchart TD
     CACHE -->|同步候选 Skill 集| RETRIEVE
     CACHE -->|同步 name 查找| LOOKUP
     CACHE -->|同步 name 查找| EXECUTE
-    SKILL_TOOL --> EXECUTE
-    INLINE_DIRECT --> EXECUTE
+    SKILL_TOOL -->|经 Agent._execute_skill_tool| EXECUTE
+    INLINE_DIRECT -->|REPL direct| EXECUTE
 
     classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
