@@ -46,7 +46,7 @@ flowchart TB
             INIT_FAIL["❌ 单 server 启动 / 初始化 / 发现失败<br/>关闭该 connection；继续其他 server<br/>不阻断主 chat"]
             MCP_DISPATCH["🔌 MCP 调用路由<br/>解析 mcp__server__tool<br/>查找已登记 connection"]
             MCP_RETURN["返回主 Runtime 的 tool result<br/>content text blocks 拼接；否则 JSON"]
-            MCP_RISK["⚠ manager / transport 风险<br/>1. load 前置 _connected = True；失败后续 chat 不重试<br/>disconnect_all 不重置 Agent flag，Agent 也未自动调用<br/>2. 未连接 / JSON-RPC error / write 或 drain 异常向上抛<br/>Anthropic 转 tool error；OpenAI 可能终止 loop<br/>3. stdout EOF 直接 break，不 fail pending Future<br/>4. _send_request 先 write / drain，后登记 Future<br/>极快 response 可能在登记前被丢弃<br/>5. 运行期 tools/call 无 timeout<br/>EOF / 登记竞态可导致永久等待"]
+            MCP_RISK["⚠ manager / transport 风险<br/>1. load 前置 _connected = True；失败后续 chat 不重试<br/>成功 server 持续到 disconnect_all / 宿主退出；前者逐 connection close<br/>清空 _connections / _tools 并置 _connected = False<br/>但不重置 Agent._mcp_initialized，且 Agent 未自动调用<br/>2. 未连接 / JSON-RPC error / write 或 drain 异常向上抛<br/>Anthropic 转 tool error；OpenAI 可能终止 loop<br/>3. stdout EOF 直接 break，不 fail pending Future<br/>4. _send_request 先 write / drain，后登记 Future<br/>极快 response 可能在登记前被丢弃<br/>5. 运行期 tools/call 无 timeout<br/>EOF / 登记竞态可导致永久等待"]
 
             CONFIG --> MANAGER
             LAZY --> MANAGER
