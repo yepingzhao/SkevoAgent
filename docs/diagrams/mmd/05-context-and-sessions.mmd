@@ -62,7 +62,7 @@ flowchart TB
         REPLACE["替换当前原始历史<br/>OpenAI：system + folded user<br/>Anthropic：单条 folded user"]
         FOLD_KIND{"本次 trigger 来源？"}
         MANUAL_DONE["REPL /compact 返回<br/>不产生 tool result / context break"]
-        TOOL_BREAK["_context_cleared = True<br/>工具结果写为新 user message<br/>停止剩余工具 / context break"]
+        TOOL_BREAK["Anthropic / OpenAI 共同行为<br/>_context_cleared = True<br/>工具结果写为新 user message<br/>停止剩余工具 / context break"]
         READY["更新后的当前 messages<br/>进入下一次模型调用"]
 
         TOOL_RESULT --> LARGE
