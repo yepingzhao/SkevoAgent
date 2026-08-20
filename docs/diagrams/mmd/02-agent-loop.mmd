@@ -6,11 +6,13 @@ config:
 ---
 %% Purpose: 按真实顺序展示一次用户请求从 CLI 到模型、工具、Session 和后台任务的生命周期。
 %% Audience: both
-%% Sources: agents/main.py, agents/agent.py
+%% Sources: agents/main.py, agents/agent.py, agents/skills.py, agents/memory.py
 %% Anchors: run_repl, run_one_shot, Agent.chat, Agent._chat_openai, Agent._chat_anthropic, Agent._check_budget
 %% Out of scope: 权限决策细节、具体工具实现、Skill 演化内部判断。
 
 sequenceDiagram
+    accTitle: Skevo Agent Loop 请求生命周期
+    accDescr: 用户请求进入 Runtime，经流式模型与工具循环处理，最后调度后台任务并保存 Session
     autonumber
     actor User as 👤 用户
     participant CLI as ⌨ CLI / REPL
@@ -32,10 +34,11 @@ sequenceDiagram
     Skills-->>Runtime: top 3 metadata / 无命中
 
     alt OpenAI-compatible
-        Runtime->>Memory: 启动异步预取
+        Runtime--)Memory: 启动异步预取
     else Anthropic-compatible
-        Runtime->>Memory: 启动异步预取
+        Runtime--)Memory: 启动异步预取
     end
+    Note right of Runtime: 预取或注入失败不打断模型循环
 
     loop 文本或 tool call 驱动的 Agent Loop
         Runtime->>Runtime: compression pipeline
@@ -43,24 +46,36 @@ sequenceDiagram
             Memory-->>Runtime: 非阻断注入相关长期记忆
         end
         Runtime->>Model: 流式模型调用（可重试错误指数退避）
-        Model-->>Runtime: text + tool calls
+        Model-->>Runtime: 流式 text delta / tool call delta
+        Runtime-->>CLI: 流式输出文本
+        opt Anthropic 流式期间工具块已完整
+            Runtime--)Tools: 并发安全且权限已允许：提前启动
+        end
         alt 无 tool call
-            Runtime-->>CLI: 最终文本
+            Runtime->>Runtime: 当前回复结束
         else 达到 max_turns / max_cost_usd
             Runtime->>Runtime: 跳过工具并记录预算原因
         else 有 tool call 且预算允许
             Runtime->>Tools: 权限检查与执行
             Tools-->>Runtime: tool result / denied / error
-            Runtime->>Model: 回写 tool result 并继续推理
+            Runtime->>Runtime: 将 tool result 追加到消息历史
+            opt context break
+                Runtime->>Runtime: 停止当前工具批次并使用新上下文继续
+            end
             Runtime->>Runtime: 工具批次后检查自动 compaction
         end
-        opt abort 或 context break
-            Runtime->>Runtime: 终止相应循环
+        opt abort
+            Runtime->>Runtime: 终止 Agent Loop
         end
     end
 
-    Runtime->>State: 自动保存 Session
-    Runtime--)State: Skill usage tracking
-    Runtime--)State: 已成熟窗口的 online evolution
-    Runtime->>State: 保存当前轮为下一 pending window
+    opt 主 Agent 且未 abort
+        Runtime--)State: 异步调度 Skill usage tracking
+        Runtime--)State: 异步调度已成熟窗口的 online evolution
+        Runtime->>Runtime: 设置下一 pending extraction window
+    end
+    opt 主 Agent
+        Runtime->>State: _auto_save Session
+    end
+    Note over CLI,State: one-shot 在 chat 后等待后台任务；REPL 在退出时等待
     CLI-->>User: 输出完成
