@@ -1,0 +1,1173 @@
+# Skevo Mermaid Diagram Suite Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace the empty legacy Mermaid sources with nine code-backed Chinese-first diagrams, render matching SVG/PNG assets, and update the diagram documentation and root README reference.
+
+**Architecture:** The suite uses one architecture diagram, one sequence diagram, and seven focused flowcharts. Each source is self-contained with Mermaid frontmatter, maintenance metadata, high-contrast styles, and a narrow responsibility defined by the approved design spec.
+
+**Tech Stack:** Mermaid CLI 11.16.0 (`mmdc`), Mermaid flowcharts and sequence diagrams, Markdown, SVG, PNG, Git.
+
+**Design spec:** `docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md`
+
+---
+
+## File map
+
+**Delete obsolete empty sources:**
+
+- `docs/diagrams/mmd/01-overall-architecture.mmd`
+- `docs/diagrams/mmd/03-permission-and-plan-mode.mmd`
+- `docs/diagrams/mmd/04-context-folding.mmd`
+- `docs/diagrams/mmd/05-memory-and-skills.mmd`
+- `docs/diagrams/mmd/06-skill-evolution.mmd`
+- `docs/diagrams/mmd/07-skill-evaluation.mmd`
+- `docs/diagrams/mmd/08-mcp-and-subagents.mmd`
+
+**Create or replace sources:**
+
+- `docs/diagrams/mmd/01-system-architecture.mmd`
+- `docs/diagrams/mmd/02-agent-loop.mmd`
+- `docs/diagrams/mmd/03-tool-loading-and-dispatch.mmd`
+- `docs/diagrams/mmd/04-permissions-and-plan-mode.mmd`
+- `docs/diagrams/mmd/05-context-and-sessions.mmd`
+- `docs/diagrams/mmd/06-skill-runtime.mmd`
+- `docs/diagrams/mmd/07-skill-evolution.mmd`
+- `docs/diagrams/mmd/08-skill-evaluation.mmd`
+- `docs/diagrams/mmd/09-mcp-and-subagents.mmd`
+
+**Regenerate outputs:**
+
+- `docs/diagrams/svg/*.svg`
+- `docs/diagrams/png/*.png`
+
+**Modify documentation:**
+
+- `docs/diagrams/README.md`
+- `README.md` — change only the architecture image path and preserve all unrelated user edits.
+
+## Shared implementation rules
+
+- Keep Mermaid frontmatter as the first bytes of every MMD file.
+- Use Chinese labels first; preserve exact module, function, protocol, and state identifiers in English.
+- Every `classDef` must set `fill`, `stroke`, `stroke-width`, and `color`.
+- Use `-->` for direct calls/control, `-.->` for async or non-blocking work, and labeled solid edges for persistence.
+- Render with white background. Do not pass `-t neutral`; the source frontmatter owns the theme.
+- Validate each source immediately after creating it. Do not update Markdown references until all nine sources render.
+- Preserve the existing uncommitted root `README.md` change except for replacing `01-overall-architecture.svg` with `01-system-architecture.svg`.
+
+### Task 1: Create the system architecture diagram
+
+**Files:**
+
+- Delete: the seven obsolete empty MMD files listed in the file map
+- Create: `docs/diagrams/mmd/01-system-architecture.mmd`
+
+- [ ] **Step 1: Remove only the obsolete empty sources**
+
+For each of the seven exact paths listed above that exists in the execution workspace, use `apply_patch` with `*** Delete File`. A dedicated worktree may not contain these currently untracked empty files; absence is already the desired state. Do not delete `02-agent-loop.mmd`, because it remains part of the new suite.
+
+- [ ] **Step 2: Create the architecture source**
+
+Write `docs/diagrams/mmd/01-system-architecture.mmd` with this complete content:
+
+```mermaid
+---
+title: Skevo 系统架构
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示 Skevo 的静态系统边界、内部责任和外部依赖。
+%% Audience: both
+%% Sources: agents/main.py, agents/agent.py, agents/prompt.py, agents/tools.py, agents/memory.py, agents/skills.py, agents/session.py, agents/mcp_client.py, agents/subagent.py
+%% Anchors: main, Agent.chat, build_system_prompt, check_permission
+%% Out of scope: Agent Loop 时序、权限决策树、Skill 评测细节。
+
+flowchart TB
+    USER(["👤 用户"])
+    CLI["⌨ CLI / REPL / one-shot<br/>agents/main.py"]
+
+    subgraph SKEVO["Skevo Harness Runtime"]
+        direction TB
+        AGENT["⚙ Agent Runtime<br/>Agent.chat"]
+        MODEL_ADAPTER["◇ Prompt 与模型适配<br/>prompt.py / OpenAI / Anthropic"]
+        TOOL_CONTROL["🔐 工具调度与权限<br/>tools.py"]
+        CONTEXT["◆ 上下文、Memory 与 Session"]
+        SKILLS["★ Skills 与在线演化"]
+        EXTENSIONS["🔌 MCP 与子 Agent"]
+    end
+
+    OPENAI["☁ OpenAI-compatible"]
+    ANTHROPIC["☁ Anthropic-compatible"]
+    LOCAL["■ 本地文件系统与 Shell"]
+    MCP_SERVER["🔌 外部 MCP Server"]
+    USER_STATE[("💾 ~/.skevo")]
+    PROJECT_STATE[("💾 项目 .skevo")]
+    SESSION_STATE[("💾 Session 数据")]
+
+    USER --> CLI --> AGENT
+    AGENT --> MODEL_ADAPTER
+    MODEL_ADAPTER -->|推理请求 / 流式响应| OPENAI
+    MODEL_ADAPTER -->|推理请求 / 流式响应| ANTHROPIC
+    AGENT --> TOOL_CONTROL
+    AGENT --> CONTEXT
+    AGENT --> SKILLS
+    AGENT --> EXTENSIONS
+    TOOL_CONTROL -->|获准的环境操作| LOCAL
+    EXTENSIONS -->|stdio JSON-RPC| MCP_SERVER
+    CONTEXT -->|读写| SESSION_STATE
+    CONTEXT -->|读取长期记忆| USER_STATE
+    SKILLS -->|发现 / 演化| USER_STATE
+    SKILLS -->|发现 / 演化| PROJECT_STATE
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
+
+    class USER,CLI actor
+    class AGENT runtime
+    class MODEL_ADAPTER model
+    class TOOL_CONTROL control
+    class CONTEXT,USER_STATE,PROJECT_STATE,SESSION_STATE state
+    class SKILLS,EXTENSIONS extension
+    class OPENAI,ANTHROPIC,LOCAL,MCP_SERVER external
+```
+
+- [ ] **Step 3: Render the source to a temporary SVG**
+
+Run:
+
+```bash
+mmdc -i docs/diagrams/mmd/01-system-architecture.mmd -o /tmp/01-system-architecture.svg -b white
+```
+
+Expected: exit code 0 and `/tmp/01-system-architecture.svg` is non-empty.
+
+- [ ] **Step 4: Inspect the SVG**
+
+Open `/tmp/01-system-architecture.svg` with the available image viewer. Confirm that the four layers are legible, no label is clipped, and the central runtime boundary is visually dominant.
+
+- [ ] **Step 5: Commit the architecture source**
+
+```bash
+git add docs/diagrams/mmd/01-system-architecture.mmd
+git commit -m "docs: add Skevo system architecture diagram"
+```
+
+### Task 2: Create the Agent Loop sequence diagram
+
+**Files:**
+
+- Replace: `docs/diagrams/mmd/02-agent-loop.mmd`
+
+- [ ] **Step 1: Write the complete sequence source**
+
+```mermaid
+---
+title: Agent Loop：一次请求的完整生命周期
+config:
+  theme: base
+  look: classic
+---
+%% Purpose: 按真实顺序展示一次用户请求从 CLI 到模型、工具、Session 和后台任务的生命周期。
+%% Audience: both
+%% Sources: agents/main.py, agents/agent.py
+%% Anchors: run_repl, run_one_shot, Agent.chat, Agent._chat_openai, Agent._chat_anthropic, Agent._check_budget
+%% Out of scope: 权限决策细节、具体工具实现、Skill 演化内部判断。
+
+sequenceDiagram
+    autonumber
+    actor User as 👤 用户
+    participant CLI as ⌨ CLI / REPL
+    participant Runtime as ⚙ Agent Runtime
+    participant Skills as ★ Skills
+    participant Memory as ◆ Memory
+    participant Model as ◇ 模型后端
+    participant Tools as 🔐 工具运行时
+    participant State as 💾 Session / 后台任务
+
+    User->>CLI: 输入任务
+    CLI->>Runtime: Agent.chat(user_message)
+    opt 主 Agent 首次 chat
+        Runtime->>Runtime: 懒加载 MCP 工具定义
+        Note right of Runtime: MCP 失败只记录错误，不阻断对话
+    end
+    Runtime->>Runtime: 消费上一轮 pending extraction window
+    Runtime->>Skills: BM25 检索相关 Skill 摘要
+    Skills-->>Runtime: top 3 metadata / 无命中
+
+    alt OpenAI-compatible
+        Runtime->>Memory: 启动异步预取
+    else Anthropic-compatible
+        Runtime->>Memory: 启动异步预取
+    end
+
+    loop 文本或 tool call 驱动的 Agent Loop
+        Runtime->>Runtime: compression pipeline
+        opt Memory 已返回且尚未消费
+            Memory-->>Runtime: 非阻断注入相关长期记忆
+        end
+        Runtime->>Model: 流式模型调用（可重试错误指数退避）
+        Model-->>Runtime: text + tool calls
+        alt 无 tool call
+            Runtime-->>CLI: 最终文本
+        else 达到 max_turns / max_cost_usd
+            Runtime->>Runtime: 跳过工具并记录预算原因
+        else 有 tool call 且预算允许
+            Runtime->>Tools: 权限检查与执行
+            Tools-->>Runtime: tool result / denied / error
+            Runtime->>Model: 回写 tool result 并继续推理
+            Runtime->>Runtime: 工具批次后检查自动 compaction
+        end
+        opt abort 或 context break
+            Runtime->>Runtime: 终止相应循环
+        end
+    end
+
+    Runtime->>State: 自动保存 Session
+    Runtime--)State: Skill usage tracking
+    Runtime--)State: 已成熟窗口的 online evolution
+    Runtime->>State: 保存当前轮为下一 pending window
+    CLI-->>User: 输出完成
+```
+
+- [ ] **Step 2: Validate and render**
+
+Run:
+
+```bash
+mmdc -i docs/diagrams/mmd/02-agent-loop.mmd -o /tmp/02-agent-loop.svg -b white
+```
+
+Expected: exit code 0; sequence participants and `loop`/`alt` blocks render without overlap.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/02-agent-loop.mmd
+git commit -m "docs: document the Agent Loop sequence"
+```
+
+### Task 3: Create the tool loading and dispatch diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/03-tool-loading-and-dispatch.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: 工具加载、按需激活与执行路由
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示工具来源、deferred tool 激活和获准调用的执行路由。
+%% Audience: maintainer
+%% Sources: agents/tools.py, agents/prompt.py, agents/agent.py
+%% Anchors: tool_definitions, get_active_tool_definitions, get_deferred_tool_names, execute_tool, Agent._execute_tool_call
+%% Out of scope: 权限决策树、MCP 握手、子 Agent 类型。
+
+flowchart LR
+    subgraph SOURCES["工具来源"]
+        EAGER["⚙ eager tools"]
+        DEFERRED["◌ deferred tools"]
+        MCPDEF["🔌 MCP tool definitions"]
+        CUSTOM["◎ custom tools"]
+    end
+
+    subgraph VISIBILITY["模型可见性"]
+        PROMPT["System Prompt<br/>只列 deferred 名称"]
+        SEARCH["tool_search<br/>eager tool"]
+        SCHEMA["返回完整 tool schema"]
+        ACTIVE["active tool definitions"]
+        MODEL["◇ 下一次模型请求"]
+    end
+
+    CALL["模型产生 tool call"]
+    PERMISSION["🔐 check_permission<br/>详见图 04"]
+    DISPATCH{"⚙ _execute_tool_call 路由"}
+    SPECIAL["compact / plan 特殊工具"]
+    SKILL["★ skill"]
+    AGENT["◎ agent"]
+    MCP["🔌 mcp__server__tool"]
+    BUILTIN["内置 execute_tool"]
+    RESULT["规范化 tool result<br/>截断或大结果落盘"]
+    UNKNOWN["❌ unknown / execution error"]
+
+    EAGER --> ACTIVE
+    MCPDEF --> ACTIVE
+    CUSTOM --> ACTIVE
+    DEFERRED --> PROMPT --> MODEL
+    MODEL -->|需要 schema| SEARCH --> SCHEMA --> ACTIVE
+    ACTIVE --> MODEL
+    MODEL --> CALL --> PERMISSION
+    PERMISSION -->|allow| DISPATCH
+    DISPATCH --> SPECIAL --> RESULT
+    DISPATCH --> SKILL --> RESULT
+    DISPATCH --> AGENT --> RESULT
+    DISPATCH --> MCP --> RESULT
+    DISPATCH --> BUILTIN --> RESULT
+    DISPATCH --> UNKNOWN --> RESULT
+    RESULT -->|回写| MODEL
+
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+
+    class EAGER,DEFERRED,ACTIVE,CALL,DISPATCH,BUILTIN,RESULT runtime
+    class PROMPT,MODEL model
+    class SEARCH,SCHEMA,PERMISSION,SPECIAL control
+    class MCPDEF,CUSTOM,SKILL,AGENT,MCP extension
+    class UNKNOWN error
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/03-tool-loading-and-dispatch.mmd -o /tmp/03-tool-loading-and-dispatch.svg -b white
+```
+
+Expected: exit code 0; the three phases read left-to-right and the return edge does not obscure the source subgraph.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/03-tool-loading-and-dispatch.mmd
+git commit -m "docs: add tool loading and dispatch diagram"
+```
+
+### Task 4: Create the permissions and Plan Mode diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/04-permissions-and-plan-mode.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: 权限决策与 Plan Mode 状态转换
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 严格展示 check_permission 的判断顺序和 Plan Mode 的状态转换。
+%% Audience: maintainer
+%% Sources: agents/main.py, agents/tools.py, agents/agent.py
+%% Anchors: _resolve_permission_mode, check_permission, Agent.toggle_plan_mode, Agent._execute_plan_mode_tool
+%% Out of scope: 工具 schema 加载、工具内部实现。
+
+flowchart TD
+    START(["tool call"])
+    BYPASS{"bypassPermissions?"}
+    RULE_DENY{"permission rule deny?"}
+    RULE_ALLOW{"permission rule allow?"}
+    READ{"READ_TOOLS?"}
+    PLAN{"permission_mode = plan?"}
+    PLAN_EDIT{"EDIT_TOOLS?"}
+    PLAN_FILE{"目标是唯一 plan 文件?"}
+    PLAN_SHELL{"run_shell?"}
+    PLAN_TOOL{"enter / exit plan mode?"}
+    ACCEPT{"acceptEdits 且为 EDIT_TOOLS?"}
+    NEED_CONFIRM{"危险或需确认操作?"}
+    DONTASK{"dontAsk?"}
+    USER_CONFIRM{"👤 用户确认?"}
+    ALLOW(["允许执行"])
+    DENY(["❌ 拒绝并返回 tool result"])
+
+    START --> BYPASS
+    BYPASS -->|是| ALLOW
+    BYPASS -->|否| RULE_DENY
+    RULE_DENY -->|是| DENY
+    RULE_DENY -->|否| RULE_ALLOW
+    RULE_ALLOW -->|是| ALLOW
+    RULE_ALLOW -->|否| READ
+    READ -->|是| ALLOW
+    READ -->|否| PLAN
+    PLAN -->|否| PLAN_TOOL
+    PLAN -->|是| PLAN_EDIT
+    PLAN_EDIT -->|是| PLAN_FILE
+    PLAN_FILE -->|是| ALLOW
+    PLAN_FILE -->|否| DENY
+    PLAN_EDIT -->|否| PLAN_SHELL
+    PLAN_SHELL -->|是| DENY
+    PLAN_SHELL -->|否| PLAN_TOOL
+    PLAN_TOOL -->|是| ALLOW
+    PLAN_TOOL -->|否| ACCEPT
+    ACCEPT -->|是| ALLOW
+    ACCEPT -->|否| NEED_CONFIRM
+    NEED_CONFIRM -->|否| ALLOW
+    NEED_CONFIRM -->|是| DONTASK
+    DONTASK -->|是| DENY
+    DONTASK -->|否| USER_CONFIRM
+    USER_CONFIRM -->|允许| ALLOW
+    USER_CONFIRM -->|拒绝| DENY
+
+    subgraph PLAN_STATE["Plan Mode 状态"]
+        ENTER["进入：保存原模式<br/>生成 plan 文件<br/>注入 Plan prompt"]
+        ACTIVE["运行：READ_TOOLS + plan 文件<br/>显式拒绝 EDIT_TOOLS / Shell"]
+        EXIT["退出：继续规划 / 执行 / 手工执行"]
+        RISK["⚠ 当前实现核对<br/>异步审批未 await<br/>未读取 plan 正文<br/>target_mode 未赋给 permission_mode<br/>其他工具可能默认允许"]
+        ENTER --> ACTIVE --> EXIT
+        ACTIVE -.-> RISK
+    end
+
+    PLAN_TOOL -.->|enter_plan_mode| ENTER
+    PLAN_TOOL -.->|exit_plan_mode| EXIT
+
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef success fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+
+    class START,BYPASS,RULE_DENY,RULE_ALLOW,READ,PLAN,PLAN_EDIT,PLAN_FILE,PLAN_SHELL,PLAN_TOOL,ACCEPT,NEED_CONFIRM,DONTASK,USER_CONFIRM,ENTER,ACTIVE,EXIT control
+    class ALLOW success
+    class DENY error
+    class RISK note
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/04-permissions-and-plan-mode.mmd -o /tmp/04-permissions-and-plan-mode.svg -b white
+```
+
+Expected: exit code 0; every decision branch has a label; the warning note is visually separate from successful paths.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/04-permissions-and-plan-mode.mmd
+git commit -m "docs: document permissions and Plan Mode"
+```
+
+### Task 5: Create the context and sessions diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/05-context-and-sessions.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: 上下文、长期记忆与会话生命周期
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示上下文组装、缩减、structured folding、持久化和恢复。
+%% Audience: maintainer
+%% Sources: agents/prompt.py, agents/memory.py, agents/agent.py, agents/session_memory.py, agents/session.py
+%% Anchors: build_system_prompt, start_memory_prefetch, Agent._run_compression_pipeline, Agent._compact_conversation, Agent.restore_session
+%% Out of scope: Skill 执行、权限决策、模型协议内部请求格式。
+
+flowchart TB
+    subgraph ASSEMBLY["上下文组装"]
+        STATIC["基础 Prompt 输入<br/>环境 / Git / CLAUDE.md / rules"]
+        MANIFEST["Memory index / Skill 与 Agent 描述<br/>deferred tool names"]
+        RUNTIME_INPUT["运行时输入<br/>Plan prompt / fold guidance / messages"]
+        SKILL_CONTEXT["★ retrieved_skills 摘要"]
+        MEMORY_PREFETCH["◆ 异步长期 Memory 召回"]
+        MODEL_CONTEXT["◇ 当前模型上下文"]
+        STATIC --> MODEL_CONTEXT
+        MANIFEST --> MODEL_CONTEXT
+        RUNTIME_INPUT --> MODEL_CONTEXT
+        SKILL_CONTEXT --> MODEL_CONTEXT
+        MEMORY_PREFETCH -.-> MODEL_CONTEXT
+    end
+
+    subgraph REDUCTION["运行中缩减"]
+        TOOL_RESULT["工具结果"]
+        LARGE["大结果落盘并返回引用"]
+        BUDGET["tool-result byte budgeting"]
+        SNIP["stale result snipping"]
+        MICRO["idle microcompact"]
+        TRIGGER{"manual / tool / auto folding?"}
+        TRANSCRIPT["OpenAI / Anthropic transcript"]
+        SIDE_QUERY["side query 生成结构化 memory"]
+        PARSE{"JSON 可解析?"}
+        FOLDED["episode / working / tool memory"]
+        FALLBACK["⚠ fallback_folded_memory"]
+        TOOL_RESULT --> LARGE --> BUDGET --> SNIP --> MICRO --> TRIGGER
+        TRIGGER -->|是| TRANSCRIPT --> SIDE_QUERY --> PARSE
+        PARSE -->|是| FOLDED
+        PARSE -->|否| FALLBACK --> FOLDED
+    end
+
+    subgraph PERSISTENCE["持久化与恢复"]
+        MESSAGES["当前 messages<br/>当前运行上下文"]
+        SESSION[("💾 Session JSON")]
+        FOLD_LOG[("💾 folded-memory JSONL / latest")]
+        LONG_MEMORY[("💾 长期 Memory Markdown<br/>跨 Session 项目知识")]
+        RESUME["--resume / restore_session"]
+        MESSAGES -->|保存| SESSION
+        FOLDED -->|替换原历史| MESSAGES
+        FOLDED -->|追加 / 写入| FOLD_LOG
+        SESSION -->|读取| RESUME
+        FOLD_LOG -->|恢复记录| RESUME
+        LONG_MEMORY -.-> MEMORY_PREFETCH
+        RESUME --> MODEL_CONTEXT
+    end
+
+    MODEL_CONTEXT --> TOOL_RESULT
+
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+
+    class MODEL_CONTEXT model
+    class STATIC,MANIFEST,RUNTIME_INPUT,MEMORY_PREFETCH,TOOL_RESULT,LARGE,BUDGET,SNIP,MICRO,TRANSCRIPT,SIDE_QUERY,FOLDED,MESSAGES,SESSION,FOLD_LOG,LONG_MEMORY,RESUME state
+    class TRIGGER,PARSE control
+    class SKILL_CONTEXT extension
+    class FALLBACK note
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/05-context-and-sessions.mmd -o /tmp/05-context-and-sessions.svg -b white
+```
+
+Expected: exit code 0; assembly, reduction, and persistence are distinct; Memory and folded Session state are not visually conflated.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/05-context-and-sessions.mmd
+git commit -m "docs: add context and session lifecycle diagram"
+```
+
+### Task 6: Create the Skill runtime diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/06-skill-runtime.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: Skill 发现、检索、调用与执行
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 区分 Skill 发现、自动检索、显式调用和 inline/fork 执行。
+%% Audience: both
+%% Sources: agents/skills.py, agents/main.py, agents/agent.py, agents/skill_evolution.py
+%% Anchors: discover_skills, retrieve_relevant_skills, format_retrieved_skill_context, execute_skill, Agent._execute_skill_tool
+%% Out of scope: 在线 add/merge/discard、评测和 MCP 初始化。
+
+flowchart TD
+    USER_SKILLS[("💾 ~/.skevo/skills")]
+    PROJECT_SKILLS[("💾 项目 .skevo/skills")]
+    LOAD["加载 SKILL.md frontmatter"]
+    DEFINITIONS["★ SkillDefinition cache<br/>项目同名项覆盖用户级"]
+    REQUEST["👤 用户请求"]
+    BM25["BM25 检索<br/>metadata 加权 + instructions"]
+    HITS{"有相关 Skill?"}
+    SUMMARY["top 3 metadata<br/>retrieved_skills"]
+    MODEL["◇ 模型判断是否调用"]
+    EXPLICIT["/<skill-name> args"]
+    LOOKUP["get_skill_by_name"]
+    EXECUTE["execute_skill<br/>resolve_skill_prompt"]
+    KNOWN{"Skill 存在?"}
+    STATS["记录 invocation stats"]
+    MODE{"context mode"}
+    INLINE["inline：Prompt 回到当前 Agent Loop"]
+    FORK["fork：工具白名单 + 隔离 Agent<br/>详见图 09"]
+    ERROR["❌ Unknown Skill / Skill fork error"]
+
+    USER_SKILLS --> LOAD
+    PROJECT_SKILLS --> LOAD
+    LOAD --> DEFINITIONS
+    REQUEST --> BM25
+    DEFINITIONS --> BM25
+    BM25 --> HITS
+    HITS -->|否| MODEL
+    HITS -->|是| SUMMARY --> MODEL
+    MODEL -->|调用 skill| EXECUTE
+    EXPLICIT --> LOOKUP --> EXECUTE
+    DEFINITIONS --> LOOKUP
+    EXECUTE --> KNOWN
+    KNOWN -->|否| ERROR
+    KNOWN -->|是| STATS --> MODE
+    MODE -->|inline| INLINE
+    MODE -->|fork| FORK
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+
+    class REQUEST,EXPLICIT actor
+    class MODEL model
+    class USER_SKILLS,PROJECT_SKILLS,LOAD,DEFINITIONS,STATS state
+    class BM25,HITS,LOOKUP,KNOWN,MODE control
+    class SUMMARY,EXECUTE,INLINE,FORK extension
+    class ERROR error
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/06-skill-runtime.mmd -o /tmp/06-skill-runtime.svg -b white
+```
+
+Expected: exit code 0; the automatic and explicit entry paths converge only at execution; retrieval does not imply activation.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/06-skill-runtime.mmd
+git commit -m "docs: add Skill runtime diagram"
+```
+
+### Task 7: Create the online Skill evolution diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/07-skill-evolution.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: 在线 Skill 演化闭环
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示连续对话与用户反馈如何形成 add/merge/discard 决策和审计记录。
+%% Audience: both
+%% Sources: agents/agent.py, agents/online_skill_evolution.py, agents/skills.py, agents/skill_evolution.py
+%% Anchors: Agent._set_pending_skill_extraction_window, extract_online_skill_candidate, maintain_online_skill_candidate, online_ingest
+%% Out of scope: replay 评测和 Champion promotion。
+
+flowchart TD
+    TURN["本轮用户输入 + assistant reply"]
+    PENDING["保存 pending extraction window"]
+    FEEDBACK["下一轮用户输入作为反馈"]
+    READY["上一窗口成熟"]
+    EXTRACT["Extractor<br/>最多一个 durable candidate"]
+    CANDIDATE{"产生候选?"}
+    NONE["none"]
+    REFERENCES["现有 Skills<br/>identity / BM25 / retrieved reference"]
+    MANAGER["Manager 决策"]
+    RULES["规则修正<br/>exact match → merge<br/>高相似 add → merge<br/>非法 action → discard"]
+    ACTION{"add / merge / discard"}
+    DISCARD["discard"]
+    CONFIRM{"写入权限允许?"}
+    DENIED["❌ add_denied / merge_denied"]
+    ADD["create_skill<br/>项目级 inline Skill"]
+    MERGE["evolve_skill<br/>active Skill 新版本"]
+    AUDIT["版本快照与 lifecycle stats"]
+    PROVENANCE[("💾 provenance log / index")]
+    POLICY["⚠ Plan Mode 不调度后台演化<br/>后台仅 bypassPermissions / acceptEdits 自动写<br/>extract_now 可交互确认"]
+
+    TURN --> PENDING
+    FEEDBACK --> READY
+    PENDING --> READY
+    READY --> EXTRACT --> CANDIDATE
+    CANDIDATE -->|否| NONE --> PROVENANCE
+    CANDIDATE -->|是| MANAGER
+    REFERENCES --> MANAGER
+    MANAGER --> RULES --> ACTION
+    ACTION -->|discard / 非法 action| DISCARD --> PROVENANCE
+    ACTION -->|add / merge| CONFIRM
+    POLICY -.-> CONFIRM
+    CONFIRM -->|否| DENIED --> PROVENANCE
+    CONFIRM -->|add| ADD --> AUDIT
+    CONFIRM -->|merge| MERGE --> AUDIT
+    AUDIT --> PROVENANCE
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+
+    class TURN,FEEDBACK actor
+    class PENDING,READY,EXTRACT,MANAGER runtime
+    class REFERENCES,AUDIT,PROVENANCE state
+    class CANDIDATE,RULES,ACTION,CONFIRM control
+    class NONE,DISCARD,ADD,MERGE extension
+    class DENIED error
+    class POLICY note
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/07-skill-evolution.mmd -o /tmp/07-skill-evolution.svg -b white
+```
+
+Expected: exit code 0; every terminal action reaches provenance; the policy note is non-blocking and visually secondary.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/07-skill-evolution.mmd
+git commit -m "docs: add online Skill evolution diagram"
+```
+
+### Task 8: Create the Skill evaluation diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/08-skill-evaluation.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: Skill 评测、候选比较与 Champion 晋升
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示评测数据如何进入 lifecycle status gate 和 Champion promotion gate。
+%% Audience: maintainer
+%% Sources: agents/online_skill_eval.py, agents/skill_evolution.py
+%% Anchors: _build_replay_pool, _assign_replay_splits, _compile_eval_rules, _build_candidate_eval_bundle_async, _skill_status, _promotion_decision, _persist_eval_artifacts
+%% Out of scope: 在线候选提取和 Skill 执行。
+
+flowchart LR
+    INPUTS["评测输入<br/>provenance / usage / lifecycle<br/>active Skill snapshot"]
+    LINEAGE["稳定 lineage ID"]
+    REPLAY["构建并冻结 replay pool"]
+    SPLIT["mutate_dev / promotion_test"]
+    RULES["确定性规则<br/>+ 可选 LLM binary judge"]
+    VARIANTS["heuristic variants<br/>+ 可选 LLM variant"]
+    DEV["mutate_dev 生成与评估"]
+    BEST["选择最佳候选"]
+    TEST["promotion_test 独立评估"]
+    STATUS{"lifecycle status gate"}
+    NOT_HEALTHY["unobserved / incubating<br/>watch / pruned"]
+    HEALTHY["healthy"]
+    CHAMPION{"已有 Champion?"}
+    FIRST["首个健康候选"]
+    BEAT{"平均分提升 ≥ min_score_delta<br/>且 hard failures 不增加?"}
+    PROMOTE["active_champion"]
+    REJECT["rejected"]
+    ARTIFACTS[("💾 dataset / eval spec / runs / report<br/>champion registry / JSON / SKILL.md")]
+    NOTE["Champion 不覆盖 active Skill"]
+
+    INPUTS --> LINEAGE --> REPLAY --> SPLIT
+    SPLIT --> RULES
+    SPLIT --> VARIANTS
+    RULES --> DEV
+    VARIANTS --> DEV --> BEST --> TEST --> STATUS
+    STATUS -->|非 healthy| NOT_HEALTHY --> REJECT
+    STATUS -->|healthy| HEALTHY --> CHAMPION
+    CHAMPION -->|否| FIRST --> PROMOTE
+    CHAMPION -->|是| BEAT
+    BEAT -->|是| PROMOTE
+    BEAT -->|否| REJECT
+    PROMOTE --> ARTIFACTS
+    REJECT --> ARTIFACTS
+    ARTIFACTS -.-> NOTE
+
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+
+    class INPUTS,LINEAGE,REPLAY,SPLIT,RULES,VARIANTS,DEV,BEST,TEST runtime
+    class ARTIFACTS state
+    class STATUS,CHAMPION,BEAT control
+    class HEALTHY,FIRST,PROMOTE extension
+    class NOT_HEALTHY,REJECT error
+    class NOTE note
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/08-skill-evaluation.mmd -o /tmp/08-skill-evaluation.svg -b white
+```
+
+Expected: exit code 0; mutate-dev selection and promotion-test evaluation are visibly separate; rejected and promoted paths both persist artifacts.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/08-skill-evaluation.mmd
+git commit -m "docs: add Skill evaluation and promotion diagram"
+```
+
+### Task 9: Create the MCP and sub-agent boundaries diagram
+
+**Files:**
+
+- Create: `docs/diagrams/mmd/09-mcp-and-subagents.mmd`
+
+- [ ] **Step 1: Write the complete flowchart**
+
+```mermaid
+---
+title: MCP 进程边界与子 Agent 上下文边界
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示 Runtime 跨越 MCP 进程边界和子 Agent 上下文边界的方式。
+%% Audience: maintainer
+%% Sources: agents/mcp_client.py, agents/subagent.py, agents/agent.py
+%% Anchors: McpManager.load_and_connect, McpManager.get_tool_definitions, McpManager.call_tool, get_sub_agent_config, Agent._execute_agent_tool, Agent._execute_skill_tool
+%% Out of scope: 通用权限决策和 Skill 检索。
+
+flowchart LR
+    RUNTIME["⚙ 主 Agent Runtime"]
+
+    subgraph MCP_BOUNDARY["MCP 进程边界"]
+        CONFIG["配置覆盖<br/>用户 settings → 项目 settings → .mcp.json"]
+        MANAGER["🔌 McpManager"]
+        PROCESS["stdio MCP 子进程"]
+        HANDSHAKE["initialize → initialized → tools/list"]
+        DEFINITIONS["mcp__server__tool definitions"]
+        ROUTE["解析 server / tool name<br/>tools/call"]
+        MCP_RESULT["MCP content → tool result"]
+        MCP_FAIL["⚠ 单 server 失败只关闭自身"]
+        CONFIG --> MANAGER --> PROCESS --> HANDSHAKE --> DEFINITIONS
+        ROUTE --> PROCESS --> MCP_RESULT
+        PROCESS -.-> MCP_FAIL
+    end
+
+    subgraph SUB_BOUNDARY["子 Agent 上下文边界"]
+        ENTRY["agent tool / Skill fork"]
+        CONFIG_AGENT["get_sub_agent_config"]
+        TYPES["explore / plan / general / custom"]
+        TOOLS["只读集合 / allowed-tools<br/>或除 agent 外的工具"]
+        CHILD["◎ 新 Agent<br/>独立 prompt / messages / loop"]
+        ISOLATION["is_sub_agent = True<br/>无 Memory 注入 / MCP 懒加载 / 在线演化"]
+        CHILD_RESULT["最终文本 + token 增量"]
+        CHILD_FAIL["❌ Sub-agent / Skill fork error"]
+        ENTRY --> CONFIG_AGENT --> TYPES --> TOOLS --> CHILD
+        CHILD --> ISOLATION --> CHILD_RESULT
+        CHILD --> CHILD_FAIL
+    end
+
+    RUNTIME -->|首次 chat| MANAGER
+    DEFINITIONS -->|追加 self.tools| RUNTIME
+    RUNTIME -->|mcp__server__tool| ROUTE
+    MCP_RESULT --> RUNTIME
+    RUNTIME --> ENTRY
+    CHILD_RESULT --> RUNTIME
+    CHILD_FAIL --> RUNTIME
+    RISK["⚠ 子 Agent 可继承 MCP definitions<br/>但新的 McpManager 未连接<br/>definition 不等于可用 connection"]
+    DEFINITIONS -.-> TOOLS
+    TOOLS -.-> RISK
+
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+
+    class RUNTIME runtime
+    class CONFIG,CONFIG_AGENT,TOOLS,ISOLATION state
+    class MANAGER,PROCESS,HANDSHAKE,DEFINITIONS,ROUTE,MCP_RESULT,ENTRY,TYPES,CHILD,CHILD_RESULT extension
+    class CHILD_FAIL error
+    class MCP_FAIL,RISK note
+```
+
+- [ ] **Step 2: Validate and render**
+
+```bash
+mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents.svg -b white
+```
+
+Expected: exit code 0; MCP and sub-agent boundaries share the central Runtime but remain visually distinct; both risk notes are legible.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/diagrams/mmd/09-mcp-and-subagents.mmd
+git commit -m "docs: add MCP and sub-agent boundaries diagram"
+```
+
+### Task 10: Regenerate all SVG and PNG outputs
+
+**Files:**
+
+- Create: `docs/diagrams/svg/01-system-architecture.svg` through `09-mcp-and-subagents.svg`
+- Create: `docs/diagrams/png/01-system-architecture.png` through `09-mcp-and-subagents.png`
+
+- [ ] **Step 1: Ensure output directories exist**
+
+```bash
+mkdir -p docs/diagrams/svg docs/diagrams/png
+```
+
+- [ ] **Step 2: Render every MMD to SVG**
+
+```bash
+for source in docs/diagrams/mmd/*.mmd; do
+  name=${source##*/}
+  name=${name%.mmd}
+  mmdc -i "$source" -o "docs/diagrams/svg/$name.svg" -b white
+done
+```
+
+Expected: nine successful Mermaid CLI runs and nine non-empty SVG files.
+
+- [ ] **Step 3: Render every MMD to 2× PNG**
+
+```bash
+for source in docs/diagrams/mmd/*.mmd; do
+  name=${source##*/}
+  name=${name%.mmd}
+  mmdc -i "$source" -o "docs/diagrams/png/$name.png" -b white -s 2
+done
+```
+
+Expected: nine successful Mermaid CLI runs and nine non-empty PNG files.
+
+- [ ] **Step 4: Verify file counts and image types**
+
+```bash
+find docs/diagrams/mmd -maxdepth 1 -type f -name '*.mmd' | wc -l
+find docs/diagrams/svg -maxdepth 1 -type f -name '*.svg' | wc -l
+find docs/diagrams/png -maxdepth 1 -type f -name '*.png' | wc -l
+file docs/diagrams/png/*.png
+```
+
+Expected: `9`, `9`, `9`; every PNG is reported as PNG image data.
+
+- [ ] **Step 5: Visually inspect every generated image**
+
+Create a temporary contact sheet or open the images individually. Check node overlap, clipped Chinese text, edge-label collisions, excessive width, white background, and readability at thumbnail size. If a diagram fails visual review, edit only its MMD and rerender both formats before continuing.
+
+- [ ] **Step 6: Commit rendered assets**
+
+```bash
+git add docs/diagrams/svg docs/diagrams/png
+git commit -m "docs: render Mermaid diagram assets"
+```
+
+### Task 11: Rewrite the diagram index and update the root README
+
+**Files:**
+
+- Replace: `docs/diagrams/README.md`
+- Modify: `README.md`
+
+- [ ] **Step 1: Replace the diagram README**
+
+Write `docs/diagrams/README.md` with this content:
+
+```markdown
+# Skevo Mermaid 图集
+
+本目录以当前 Python 实现为事实来源，管理 Skevo 的 Mermaid 图源和渲染产物。
+
+- `mmd/`：可维护的 Mermaid 源文件。
+- `svg/`：用于 Markdown 和网页的矢量图。
+- `png/`：用于预览、汇报和不支持 SVG 的场景，按 2 倍缩放生成。
+
+全部图源均使用 Mermaid CLI 11.16.0 验证，并以白色背景生成 SVG 和 PNG。
+
+## 快速理解
+
+| 图 | 说明 | 主要读者 |
+| --- | --- | --- |
+| [01 系统架构](svg/01-system-architecture.svg) | Skevo 的系统边界、内部职责和外部依赖 | 所有人 |
+| [02 Agent Loop](svg/02-agent-loop.svg) | 一次请求从输入到保存和后台任务的完整生命周期 | 所有人 |
+
+## Runtime 机制
+
+| 图 | 说明 | 主要读者 |
+| --- | --- | --- |
+| [03 工具加载与路由](svg/03-tool-loading-and-dispatch.svg) | eager/deferred/MCP/custom 工具如何进入模型并被执行 | 维护者 |
+| [04 权限与 Plan Mode](svg/04-permissions-and-plan-mode.svg) | `check_permission` 顺序和 Plan Mode 状态 | 维护者 |
+| [05 上下文与会话](svg/05-context-and-sessions.svg) | Prompt、Memory、压缩、folding、保存与恢复 | 维护者 |
+
+## 能力与扩展
+
+| 图 | 说明 | 主要读者 |
+| --- | --- | --- |
+| [06 Skill Runtime](svg/06-skill-runtime.svg) | Skill 发现、检索、调用与 inline/fork 执行 | 所有人 |
+| [07 Skill 演化](svg/07-skill-evolution.svg) | 用户反馈驱动的 add/merge/discard 闭环 | 所有人 |
+| [08 Skill 评测](svg/08-skill-evaluation.svg) | replay、规则、候选比较和 Champion 晋升 | 维护者 |
+| [09 MCP 与子 Agent](svg/09-mcp-and-subagents.svg) | MCP 进程边界和子 Agent 上下文边界 | 维护者 |
+
+每张图都有同 basename 的三种文件：
+
+```text
+mmd/01-system-architecture.mmd
+svg/01-system-architecture.svg
+png/01-system-architecture.png
+```
+
+## 推荐阅读路径
+
+- 项目访客：`01 → 02 → 06 → 07`
+- Runtime 维护者：`01 → 02 → 03 → 04 → 05 → 09`
+- 自进化机制研究者：`06 → 07 → 08`
+- 完整维护者：按编号阅读 `01 → 09`
+
+## 重新渲染
+
+```bash
+mkdir -p docs/diagrams/svg docs/diagrams/png
+for source in docs/diagrams/mmd/*.mmd; do
+  name=${source##*/}
+  name=${name%.mmd}
+  mmdc -i "$source" -o "docs/diagrams/svg/$name.svg" -b white
+  mmdc -i "$source" -o "docs/diagrams/png/$name.png" -b white -s 2
+done
+```
+
+## 权威代码
+
+- Runtime 与 Agent Loop：`agents/agent.py`
+- CLI 与 Plan 审批入口：`agents/main.py`
+- Prompt 构建：`agents/prompt.py`
+- 工具与权限：`agents/tools.py`
+- Memory 与 Session：`agents/memory.py`、`agents/session_memory.py`、`agents/session.py`
+- Skill Runtime 与演化：`agents/skills.py`、`agents/online_skill_evolution.py`、`agents/skill_evolution.py`
+- Skill 评测：`agents/online_skill_eval.py`
+- MCP 与子 Agent：`agents/mcp_client.py`、`agents/subagent.py`
+
+图中带 `⚠` 的节点表示当前实现的已知风险或降级边界，不代表已修复行为。
+```
+
+- [ ] **Step 2: Update only the architecture image path in the root README**
+
+Replace the existing architecture image line. In the shared workspace it currently reads:
+
+```markdown
+![Skevo Agent 总体架构](docs/diagrams/svg/01-overall-architecture.svg)
+```
+
+A clean worktree created from the committed baseline may instead contain:
+
+```markdown
+![Skevo Agent 总体架构](wiki/assets/architecture/01-overall-architecture.svg)
+```
+
+Replace whichever one is present with:
+
+```markdown
+![Skevo Agent 系统架构](docs/diagrams/svg/01-system-architecture.svg)
+```
+
+Do not alter any other root README lines.
+
+- [ ] **Step 3: Verify every Markdown image link exists**
+
+Run:
+
+```bash
+rg -n 'docs/diagrams|svg/' README.md docs/diagrams/README.md
+```
+
+Expected: the root README references only `01-system-architecture.svg`; the diagram README references all nine new SVG basenames and no legacy basename.
+
+- [ ] **Step 4: Commit documentation integration**
+
+```bash
+git add README.md docs/diagrams/README.md
+git commit -m "docs: publish the Mermaid diagram suite"
+```
+
+### Task 12: Run the final verification gate
+
+**Files:**
+
+- Verify all files created or modified by Tasks 1–11
+
+- [ ] **Step 1: Revalidate every MMD from source**
+
+```bash
+for source in docs/diagrams/mmd/*.mmd; do
+  name=${source##*/}
+  name=${name%.mmd}
+  mmdc -i "$source" -o "/tmp/$name.verify.svg" -b white
+done
+```
+
+Expected: nine exit-code-0 runs.
+
+- [ ] **Step 2: Compare MMD, SVG, and PNG basename sets**
+
+```bash
+find docs/diagrams/mmd -maxdepth 1 -type f -name '*.mmd' -printf '%f\n' | sed 's/\.mmd$//' | sort > /tmp/skevo-mmd.names
+find docs/diagrams/svg -maxdepth 1 -type f -name '*.svg' -printf '%f\n' | sed 's/\.svg$//' | sort > /tmp/skevo-svg.names
+find docs/diagrams/png -maxdepth 1 -type f -name '*.png' -printf '%f\n' | sed 's/\.png$//' | sort > /tmp/skevo-png.names
+diff -u /tmp/skevo-mmd.names /tmp/skevo-svg.names
+diff -u /tmp/skevo-mmd.names /tmp/skevo-png.names
+```
+
+Expected: both `diff` commands produce no output and exit 0.
+
+- [ ] **Step 3: Verify source metadata, title coverage, and legacy-name removal**
+
+```bash
+rg -L '^---$' docs/diagrams/mmd/*.mmd
+rg -L '^%% Purpose:' docs/diagrams/mmd/*.mmd
+rg -L '^%% Sources:' docs/diagrams/mmd/*.mmd
+rg -n 'overall-architecture|permission-and-plan-mode|context-folding|memory-and-skills' README.md docs/diagrams
+```
+
+Expected: the first three commands produce no missing-file output; the legacy-name search returns no matches.
+
+- [ ] **Step 4: Verify output files and repository whitespace**
+
+```bash
+test "$(find docs/diagrams/mmd -maxdepth 1 -type f -name '*.mmd' -size +0c | wc -l)" -eq 9
+test "$(find docs/diagrams/svg -maxdepth 1 -type f -name '*.svg' -size +0c | wc -l)" -eq 9
+test "$(find docs/diagrams/png -maxdepth 1 -type f -name '*.png' -size +0c | wc -l)" -eq 9
+git diff --check
+```
+
+Expected: all `test` commands exit 0 and `git diff --check` produces no output.
+
+- [ ] **Step 5: Review the final diff without disturbing unrelated work**
+
+```bash
+git status --short
+git diff 899302f..HEAD -- README.md docs/diagrams
+git log --oneline -12
+```
+
+Expected: the committed diff from the approved design commit contains only the requested README and diagram-suite changes in these paths; no Python file is modified; unrelated user changes are preserved.
+
+- [ ] **Step 6: Record verification evidence in the handoff**
+
+Report the Mermaid CLI version, nine successful source validations, `9/9/9` file counts, basename-set equality, visual-review result, README link result, and any implementation risks shown in diagrams. Do not claim completion if any render or visual check failed.
