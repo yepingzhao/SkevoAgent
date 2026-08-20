@@ -186,12 +186,12 @@ Mermaid 使用约束：
 
 必须表达：
 
-- `tool_search` 本身是 eager tool。
-- deferred tool 返回 schema 后才通过 active definitions 暴露给后续请求。
-- MCP 工具在主 Agent 首次连接后追加到 `self.tools`。
-- custom tools 由子 Agent 或 Skill fork 注入。
+- 默认 `tool_definitions` 中的 `tool_search` 是 eager tool；非空 `custom_tools` 替换默认集合时，不会自动保留它。
+- `tool_search` 命中默认 deferred tool 时记录 activated name 并返回完整 schema；后续请求只会暴露当前 `self.tools` 中非 deferred 或同名已激活的成员。
+- MCP 工具仅在主 Agent 首次 `chat` 成功完成加载、连接和发现后追加到当前 `self.tools`。
+- 非空 custom tools 由子 Agent 或 Skill fork 注入，并替换默认 `tool_definitions` 成为初始 `self.tools`。
 - built-in 工具结果会截断；大结果可能持久化后以引用返回。
-- 未知工具和执行异常会转换为工具结果，不直接终止整个会话。
+- 未知工具由 built-in `execute_tool` 返回错误文本；Anthropic 路径会捕获执行异常并归一为 tool result；OpenAI sequential/concurrent 路径当前未捕获的执行异常可能终止 Agent Loop。
 
 排除：权限模式决策、MCP initialize 细节和子 Agent 类型。
 

@@ -60,10 +60,10 @@ flowchart LR
     DISPATCH --> MCP --> RESULT
     DISPATCH --> BUILTIN
     BUILTIN -->|普通结果或完整 schema| RESULT
-    BUILTIN -.->|tool_search 命中：记录 activated name| ACTIVE
+    BUILTIN -->|tool_search 命中：记录 activated name| ACTIVE
     BUILTIN -->|未找到 handler| UNKNOWN --> RESULT
-    DISPATCH -.->|OpenAI sequential / gather<br/>未捕获执行异常| RISK
-    RESULT -.->|回写；下一次请求| MODEL
+    DISPATCH -->|OpenAI sequential / gather<br/>未捕获执行异常| RISK
+    RESULT -->|回写；下一次请求| MODEL
 
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
