@@ -311,7 +311,7 @@ Manager 同时接收：通过 normalized name/description/when-to-use 得到的 
 
 流水线：以 Skill name 生成稳定 lineage ID；从 log/index source 去重 replay；`write_artifacts=true` 时合并并覆写 frozen pool，`false` 时只在内存分片；少于两条 replay 时全部进入 `mutate_dev`，否则按稳定 hash 约 75/25 划分并保证 `mutate_dev`、`promotion_test` 均非空。编译确定性规则和仅在 side query 可用时加入的 LLM binary rules，先以全部 replay 的历史 latest assistant 评估 current active，再计算 lifecycle status，然后生成 heuristic/LLM variants；所有 variants 只在 `mutate_dev` 上竞争，唯一 winner 才在 `promotion_test` 上重新评估。side query 缺失或没有 replay 时 candidate bundle 为空。
 
-状态 gate 按实现顺序判断：`pruned` → `unobserved` → `incubating` → `watch` → `healthy`。默认数量阈值为 replay ≥ 2、promotion test ≥ 1、retrieved ≥ 5，任一不足即为 `incubating`；数量 gate 通过后，`promotion_test_hard_failures > 0`、任一 `hard_failures > 0`，或 rule pass < 0.80、relevance < 0.35、used < 0.20，均进入 `watch`，否则为 `healthy`。所有阈值均可由 Python API 覆盖。
+状态 gate 按实现顺序判断：`pruned` → `unobserved` → `incubating` → `watch` → `healthy`。默认数量阈值为 replay ≥ 2、promotion test ≥ 1、retrieved ≥ 5，任一不足即为 `incubating`；数量 gate 通过后，`promotion_test_hard_failures > 0`、任一 `hard_failures > 0`，或 rule pass < 0.80、relevance < 0.35、used < 0.20，均进入 `watch`，否则为 `healthy`。Python API 可覆盖 replay、promotion test、retrieved、rule pass、relevance、used 这六项阈值；`promotion_test_hard_failures > 0` 和 `hard_failures > 0` 是不可配置的固定实现 gate。
 
 Promotion candidate 的 dev pre-gate、candidate 选择、Champion load 和 `_promotion_decision` 都位于 `_persist_eval_artifacts` 内，因此只在 `write_artifacts=true` 时执行。pre-gate 只有在 bundle 同时含 best variant 和 promotion-test summary，且 best-dev score 至少比 current active 的全 replay score 高 0.01、hard failures 不增加时，才选择 winner snapshot 与 promotion-test summary；否则以 current active snapshot 与全 replay summary 参加 Champion gate。
 
