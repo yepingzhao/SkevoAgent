@@ -1,0 +1,66 @@
+---
+title: Skevo 系统架构
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示 Skevo 的静态系统边界、内部责任和外部依赖。
+%% Audience: both
+%% Sources: agents/main.py, agents/agent.py, agents/prompt.py, agents/tools.py, agents/memory.py, agents/skills.py, agents/session.py, agents/mcp_client.py, agents/subagent.py
+%% Anchors: main, Agent.chat, build_system_prompt, check_permission
+%% Out of scope: Agent Loop 时序、权限决策树、Skill 评测细节。
+
+flowchart TB
+    USER(["👤 用户"])
+    CLI["⌨ CLI / REPL / one-shot<br/>agents/main.py"]
+
+    subgraph SKEVO["Skevo Harness Runtime"]
+        direction TB
+        AGENT["⚙ Agent Runtime<br/>Agent.chat"]
+        MODEL_ADAPTER["◇ Prompt 与模型适配<br/>prompt.py / OpenAI / Anthropic"]
+        TOOL_CONTROL["🔐 工具调度与权限<br/>tools.py"]
+        CONTEXT["◆ 上下文、Memory 与 Session"]
+        SKILLS["★ Skills 与在线演化"]
+        EXTENSIONS["🔌 MCP 与子 Agent"]
+    end
+
+    OPENAI["☁ OpenAI-compatible"]
+    ANTHROPIC["☁ Anthropic-compatible"]
+    LOCAL["■ 本地文件系统与 Shell"]
+    MCP_SERVER["🔌 外部 MCP Server"]
+    USER_STATE[("💾 ~/.skevo")]
+    PROJECT_STATE[("💾 项目 .skevo")]
+    SESSION_STATE[("💾 Session 数据")]
+
+    USER --> CLI --> AGENT
+    AGENT --> MODEL_ADAPTER
+    MODEL_ADAPTER -->|推理请求 / 流式响应| OPENAI
+    MODEL_ADAPTER -->|推理请求 / 流式响应| ANTHROPIC
+    AGENT --> TOOL_CONTROL
+    AGENT --> CONTEXT
+    AGENT --> SKILLS
+    AGENT --> EXTENSIONS
+    TOOL_CONTROL -->|获准的环境操作| LOCAL
+    EXTENSIONS -->|stdio JSON-RPC| MCP_SERVER
+    CONTEXT -->|读写| SESSION_STATE
+    CONTEXT -->|读取长期记忆| USER_STATE
+    SKILLS -->|发现 / 演化| USER_STATE
+    SKILLS -->|发现 / 演化| PROJECT_STATE
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
+
+    class USER,CLI actor
+    class AGENT runtime
+    class MODEL_ADAPTER model
+    class TOOL_CONTROL control
+    class CONTEXT,USER_STATE,PROJECT_STATE,SESSION_STATE state
+    class SKILLS,EXTENSIONS extension
+    class OPENAI,ANTHROPIC,LOCAL,MCP_SERVER external
