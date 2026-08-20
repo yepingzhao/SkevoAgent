@@ -1,0 +1,142 @@
+---
+title: Skill 评测、候选比较与 Champion 晋升
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+    nodeSpacing: 24
+    rankSpacing: 32
+    wrappingWidth: 160
+---
+%% Purpose: 展示在线 Skill 数据如何形成 replay、进入独立的 lifecycle status gate 与 Champion promotion gate，并按真实顺序持久化评测产物。
+%% Audience: maintainer
+%% Sources: agents/online_skill_eval.py, agents/skill_evolution.py, agents/main.py, agents/agent.py
+%% Anchors: _lineage_id_for_skill, _build_replay_pool, _assign_replay_splits, _compile_eval_rules, _build_candidate_eval_bundle_async, _skill_status, _promotion_decision, _persist_eval_artifacts, _set_champion, format_online_skill_eval_async
+%% Verified: 2026-08-20 against the current Python implementation.
+%% Symbols: 👤 entry；💾 persistent state；◇ model side query；⚙ evaluation；✓ promoted；❌ rejected。
+%% Out of scope: 在线候选提取与 add / merge、Skill 运行时调用、usage judgment 如何产生。
+
+flowchart LR
+    accTitle: Skill 评测、候选比较与 Champion 晋升
+    accDescr: 按四个阶段展示在线 provenance、usage、lifecycle 与 active Skill snapshot 如何按 Skill 名生成稳定 lineage，去重并可选冻结 replay pool，再编译规则并评估当前 active Skill；lifecycle status gate 与候选 mutate dev 选择相互独立，只有 dev 胜出且经过 promotion test 的变体才可替代当前 active snapshot 参加 Champion gate；最后展示 write artifacts、write report、Champion 独立副本和部分写入失败边界
+
+    subgraph CANVAS["Skill 评测全流程"]
+      direction TB
+
+    subgraph DATA["A · 输入、lineage 与 replay 数据集"]
+        direction TB
+        ENTRY["👤 /skill-eval 或 Python API<br/>REPL 从当前 Agent 构建 side_query，且写入默认开启<br/>当前无 dry-run CLI；API 允许 side_query = None<br/>或 write_artifacts = False"]
+        INPUTS["输入集合<br/>online provenance log / index<br/>usage stats / lifecycle stats<br/>discover 得到的 active Skill snapshot"]
+        LINEAGE["稳定 lineage ID<br/>仅以去首尾空白的 Skill name<br/>做 SHA-1：skill-&lt;16 hex&gt;"]
+        POOL["构建 replay pool<br/>仅保留非空 user / assistant messages 且有 latest user<br/>sample ID 按 skill + messages + latest user<br/>log 与 index source 按 ID 去重"]
+        FREEZE{"write_artifacts?"}
+        FROZEN["💾 合并既有 replay_pool.jsonl<br/>同 ID 更新但不沿用输入 split<br/>全量重排、重新分片并覆写文件"]
+        MEMORY_ONLY["仅当前来源留在内存<br/>不读取或写入 frozen dataset"]
+        SPLIT["确定性 split<br/>少于 2 条：全部 mutate_dev，无 test<br/>至少 2 条：sample hash 约 75 / 25<br/>并强制两侧各至少 1 条"]
+
+        ENTRY --> INPUTS --> LINEAGE --> POOL --> FREEZE
+        FREEZE -->|是| FROZEN --> SPLIT
+        FREEZE -->|否| MEMORY_ONLY --> SPLIT
+    end
+
+    subgraph BASELINE["B · 当前 active 基线与 lifecycle status gate"]
+        direction TB
+        SNAPSHOT["active Skill snapshot<br/>若已不在发现结果中，则以 lineage / lifecycle<br/>补 name 与描述；instructions 为空"]
+        RULES["编译最多 8 条规则<br/>始终含 hard non-empty；按 Skill 文本增加<br/>引用 / 段数 / JSON 等 programmatic rules<br/>有 side_query 才加入 LLM binary rules"]
+        CURRENT["⚙ 评估 current_active<br/>对整个 replay pool 的历史 latest assistant<br/>逐条 awaited 规则判定；LLM judge 异常按 fail 记录"]
+        STATUS{"lifecycle status gate"}
+        STATUS_MAP["状态互斥且按顺序判断<br/>pruned：usage 已归档<br/>unobserved：replay = 0 且 retrieved = 0<br/>incubating：replay / test / retrieved 任一不足<br/>watch：hard fail 或 pass / relevance / used rate 不足<br/>healthy：以上 gate 全通过"]
+
+        INPUTS --> SNAPSHOT --> RULES
+        SPLIT --> CURRENT
+        RULES --> CURRENT --> STATUS --> STATUS_MAP
+        INPUTS -->|usage、pruned 与阈值信号| STATUS
+    end
+
+    subgraph MUTATION["C · 可选变体：mutate_dev 选择与 promotion_test 隔离"]
+        direction TB
+        SIDE_GATE{"side_query 可用且 replay 非空?"}
+        NO_VARIANT["无候选生成或评估<br/>包括同步入口、模型未配置、空 replay"]
+        VARIANTS["◇ 构建候选 variants<br/>按当前失败生成 heuristic guards；若无失败<br/>则取最多 2 条 non-programmatic rules<br/>有真实失败时再尝试 1 个 LLM mutation<br/>LLM 异常、非 JSON 或空 instructions → 忽略<br/>按 instructions 去重，最多评估 4 个"]
+        DEV["⚙ 仅在 mutate_dev 生成回复并评估<br/>回复生成异常转 candidate_response_failed 文本继续判定<br/>依 average score 降序、hard failures 升序<br/>选择唯一 winner"]
+        WINNER{"产生 dev winner?"}
+        TEST{"存在 promotion_test?"}
+        INDEPENDENT["⚙ 仅对 dev winner<br/>在 promotion_test 重新生成与评估"]
+        DEV_GATE{"winner 的 dev average score<br/>≥ current_active 全 pool score + 0.01<br/>且 hard failures 不增加?"}
+        ACTIVE_CAND["promotion candidate = current_active<br/>summary 来自整个 replay pool"]
+        VARIANT_CAND["promotion candidate = dev winner<br/>summary 仅来自独立 promotion_test"]
+
+        CURRENT --> SIDE_GATE
+        SIDE_GATE -->|否| NO_VARIANT --> ACTIVE_CAND
+        SIDE_GATE -->|是| VARIANTS --> DEV --> WINNER
+        WINNER -->|否| ACTIVE_CAND
+        WINNER -->|是| TEST
+        TEST -->|否| ACTIVE_CAND
+        TEST -->|是| INDEPENDENT --> DEV_GATE
+        DEV_GATE -->|否| ACTIVE_CAND
+        DEV_GATE -->|是| VARIANT_CAND
+    end
+
+    subgraph PROMOTION["D · artifacts、Champion promotion gate 与隔离边界"]
+        direction TB
+        PERSIST_GATE{"write_artifacts?"}
+        NO_ARTIFACTS["跳过 _persist_eval_artifacts<br/>无 eval spec / run / promotion decision<br/>不读取或修改 Champion；返回 artifacts = {}"]
+        RUN_FILES["💾 按序写 eval_spec.json<br/>再写 run outputs.jsonl / judgments.jsonl<br/>包含 current_active 与可用 variant 结果<br/>写异常未捕获：可中断并留下部分 run"]
+        CHAMP_GATE{"Champion promotion gate<br/>lifecycle status?"}
+        STATUS_SKIP["不晋升并保留 status<br/>unobserved / incubating / pruned<br/>不是 rejected"]
+        WATCH_REJECT["❌ watch → rejected"]
+        HAS_CHAMPION{"healthy 且已有 Champion summary?"}
+        FIRST["首个 healthy candidate<br/>不再比较分数"]
+        BEAT{"candidate average score<br/>≥ Champion + min_score_delta 0.01<br/>且 hard failures 不增加?"}
+        REJECT["❌ rejected"]
+        PROMOTE["✓ active_champion"]
+        CHAMPION_FILES["💾 仅晋升时按序非事务写<br/>全局 champions.json registry<br/>lineage champion.json → 独立 champion SKILL.md<br/>任一步可失败；不会覆盖 active Skill"]
+        RUN_SUMMARY["💾 所有 status 仍写 run summary.json<br/>记录 candidate、variants、promotion 与路径"]
+        REPORT_GATE{"write_report?"}
+        REPORT["💾 全部 Skills 完成后<br/>写 online_eval_report.json<br/>写异常同样向上抛出"]
+        RETURN["返回 report / 格式化终端输出"]
+
+        STATUS_MAP --> PERSIST_GATE
+        ACTIVE_CAND --> PERSIST_GATE
+        VARIANT_CAND --> PERSIST_GATE
+        PERSIST_GATE -->|否| NO_ARTIFACTS --> REPORT_GATE
+        PERSIST_GATE -->|是| RUN_FILES --> CHAMP_GATE
+        CHAMP_GATE -->|unobserved / incubating / pruned| STATUS_SKIP --> RUN_SUMMARY
+        CHAMP_GATE -->|watch| WATCH_REJECT --> RUN_SUMMARY
+        CHAMP_GATE -->|healthy| HAS_CHAMPION
+        HAS_CHAMPION -->|否| FIRST --> PROMOTE
+        HAS_CHAMPION -->|是| BEAT
+        BEAT -->|否| REJECT --> RUN_SUMMARY
+        BEAT -->|是| PROMOTE
+        PROMOTE --> CHAMPION_FILES --> RUN_SUMMARY
+        RUN_SUMMARY --> REPORT_GATE
+        REPORT_GATE -->|是| REPORT --> RETURN
+        REPORT_GATE -->|否| RETURN
+    end
+
+    end
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+
+    class ENTRY actor
+    class INPUTS,LINEAGE,POOL,MEMORY_ONLY,SPLIT,SNAPSHOT,CURRENT,NO_VARIANT,DEV,INDEPENDENT,ACTIVE_CAND,VARIANT_CAND,NO_ARTIFACTS,RETURN runtime
+    class VARIANTS model
+    class FROZEN,RUN_FILES,CHAMPION_FILES,RUN_SUMMARY,REPORT state
+    class FREEZE,STATUS,SIDE_GATE,WINNER,TEST,DEV_GATE,PERSIST_GATE,CHAMP_GATE,HAS_CHAMPION,BEAT,REPORT_GATE control
+    class RULES,STATUS_MAP,FIRST,PROMOTE extension
+    class STATUS_SKIP note
+    class WATCH_REJECT,REJECT error
+
+    style DATA fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
+    style BASELINE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style MUTATION fill:#FAF7FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    style PROMOTION fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style CANVAS fill:#FFFFFF,stroke:#53606F,stroke-width:2px,color:#202833
