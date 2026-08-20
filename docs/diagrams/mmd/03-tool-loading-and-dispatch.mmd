@@ -14,39 +14,44 @@ config:
 
 flowchart LR
     accTitle: 工具加载、按需激活与执行路由
-    accDescr: eager、MCP 和自定义工具进入活动定义；deferred 工具名称先进入系统提示，tool_search 经权限检查和执行路由激活完整 schema；获准调用再按特殊工具、Skill、子 Agent、MCP 或内置工具分派并回写模型
-    subgraph SOURCES["工具来源"]
-        EAGER["⚙ eager tools"]
-        DEFERRED["◌ deferred tools"]
-        MCPDEF["🔌 MCP tool definitions"]
-        CUSTOM["◎ custom tools"]
+    accDescr: 三个阶段从左到右展示工具来源、当前 Agent 工具集合的模型可见性与 deferred 按需激活，以及获准调用的执行路由；未知内置工具返回错误文本，而 OpenAI 路径未捕获的执行异常可能终止循环
+    subgraph SOURCES["阶段 1 · 工具来源"]
+        direction TB
+        EAGER["⚙ default eager tools"]
+        DEFERRED["◌ default deferred tools"]
+        CUSTOM["◎ custom_tools<br/>Skill / 子 Agent fork 注入"]
+        MCPDEF["🔌 MCP definitions<br/>主 Agent 首次 chat 成功发现"]
     end
 
-    subgraph VISIBILITY["模型可见性"]
-        PROMPT["System Prompt<br/>只列 deferred 名称"]
+    subgraph VISIBILITY["阶段 2 · 模型可见性与按需激活"]
+        direction TB
+        PROMPT["System Prompt<br/>仅列未激活的默认 deferred 名称"]
         SEARCH["tool_search<br/>eager tool"]
-        SCHEMA["返回完整 tool schema"]
-        ACTIVE["active tool definitions"]
-        MODEL["◇ 下一次模型请求"]
+        ACTIVE["active tool definitions<br/>当前 self.tools 中非 deferred<br/>或已激活的成员"]
+        MODEL["◇ 模型请求"]
     end
 
-    CALL["模型产生 tool call"]
-    PERMISSION["🔐 check_permission<br/>详见图 04"]
-    DISPATCH{"⚙ _execute_tool_call 路由"}
-    SPECIAL["compact / plan 特殊工具"]
-    SKILL["★ skill"]
-    AGENT["◎ agent"]
-    MCP["🔌 mcp__server__tool"]
-    BUILTIN["内置 execute_tool"]
-    RESULT["规范化 tool result<br/>截断或大结果落盘"]
-    UNKNOWN["❌ unknown / execution error"]
+    subgraph EXECUTION["阶段 3 · 获准调用的执行路由"]
+        direction TB
+        CALL["模型产生 tool call"]
+        PERMISSION["🔐 check_permission<br/>详见图 04"]
+        DISPATCH{"⚙ _execute_tool_call 路由"}
+        SPECIAL["compact / plan 特殊工具"]
+        SKILL["★ skill"]
+        AGENT["◎ agent"]
+        MCP["🔌 mcp__server__tool"]
+        BUILTIN["内置 execute_tool"]
+        UNKNOWN["❌ unknown tool<br/>execute_tool 返回错误文本"]
+        RESULT["tool result<br/>按路径截断或大结果落盘"]
+        RISK["⚠ OpenAI 路径风险<br/>未捕获执行异常可终止 loop"]
+    end
 
-    EAGER --> ACTIVE
-    MCPDEF --> ACTIVE
-    CUSTOM --> ACTIVE
+    EAGER -->|无 custom_tools：初始 self.tools| ACTIVE
+    EAGER -->|包含| SEARCH -->|无 custom_tools 时暴露| ACTIVE
+    CUSTOM -->|非空时替换 default<br/>成为初始 self.tools| ACTIVE
+    MCPDEF -->|成功后追加到当前 self.tools| ACTIVE
     DEFERRED --> PROMPT --> MODEL
-    SEARCH --> ACTIVE
-    ACTIVE --> MODEL
+    ACTIVE -->|完整 schemas| MODEL
     MODEL --> CALL --> PERMISSION
     PERMISSION -->|allow| DISPATCH
     DISPATCH --> SPECIAL --> RESULT
@@ -54,12 +59,11 @@ flowchart LR
     DISPATCH --> AGENT --> RESULT
     DISPATCH --> MCP --> RESULT
     DISPATCH --> BUILTIN
-    BUILTIN -->|普通内置工具| RESULT
-    BUILTIN -->|tool_search 命中| SCHEMA
-    SCHEMA -->|激活匹配工具| ACTIVE
-    SCHEMA -->|完整 schema 作为结果| RESULT
-    DISPATCH --> UNKNOWN --> RESULT
-    RESULT -->|回写| MODEL
+    BUILTIN -->|普通结果或完整 schema| RESULT
+    BUILTIN -.->|tool_search 命中：记录 activated name| ACTIVE
+    BUILTIN -->|未找到 handler| UNKNOWN --> RESULT
+    DISPATCH -.->|OpenAI sequential / gather<br/>未捕获执行异常| RISK
+    RESULT -.->|回写；下一次请求| MODEL
 
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
@@ -69,9 +73,10 @@ flowchart LR
 
     class EAGER,DEFERRED,ACTIVE,CALL,DISPATCH,BUILTIN,RESULT runtime
     class PROMPT,MODEL model
-    class SEARCH,SCHEMA,PERMISSION,SPECIAL control
+    class SEARCH,PERMISSION,SPECIAL control
     class MCPDEF,CUSTOM,SKILL,AGENT,MCP extension
-    class UNKNOWN error
+    class UNKNOWN,RISK error
 
     style SOURCES fill:#F8FAFC,stroke:#53606F,stroke-width:2px,color:#202833
     style VISIBILITY fill:#F5FAFF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    style EXECUTION fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
