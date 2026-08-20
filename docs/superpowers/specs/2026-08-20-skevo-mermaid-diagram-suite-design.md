@@ -330,10 +330,10 @@ Promotion gate：`unobserved`、`incubating`、`pruned` 不晋升且保留原 st
 
 MCP 侧：
 
-- `McpManager` 位于 Skevo 主进程；只有每个 MCP Server 是独立 OS 子进程，不得把 manager 画进外部进程边界。
+- `McpManager` 和 `McpConnection` 都位于 Skevo 主进程；握手次序、stdout reader task、pending Future、definition 生成、dispatch 和 result 转换也都是主进程 Client 责任。只有每个 MCP Server `PROCESS` 是独立 OS 子进程，外部进程子图不得包含上述 Client 组件。
 - 配置按用户级 `~/.skevo/settings.json` → 项目级 `.skevo/settings.json` → 项目 `.mcp.json` 读取；只有含 `command` 的有效 server 对象参与合并，后者按同名 server 覆盖前者，无效文件或配置静默跳过。
 - 仅主 Agent 首次 `chat` 尝试懒加载。`Agent._mcp_initialized` 和 manager `_connected` 都在实际连接前设置；因此初始化失败后的后续 `chat` 不会自动重试。
-- 每个 server 通过 `create_subprocess_exec` 启动 stdio 子进程；stdout 由后台 reader task 按 JSON-RPC response id 完成 pending Future。初始化顺序为 awaited `initialize` request → `notifications/initialized` notification → awaited `tools/list` request，`initialize` 和 `tools/list` 各自最多等待 15 秒。
+- 每个 server 通过 `create_subprocess_exec` 启动 stdio 子进程；主进程 Client 的 stdout reader 后台任务持续读取子进程 stdout，再按 JSON-RPC response id 完成对应 pending Future；因此 response 分发虚线的方向必须为 reader → waiting call。初始化顺序为 awaited `initialize` request → `notifications/initialized` notification → awaited `tools/list` request，`initialize` 和 `tools/list` 各自最多等待 15 秒，它们的 response 同样由 reader 唤醒。
 - 只有握手和工具发现都成功的 connection 才登记；definition 包装为 `mcp__server__tool` 并追加到当前主 Agent `self.tools`。`tools/call` 依赖已登记 connection，标准 content list 只拼接 text blocks，其他 result 转 JSON 字符串。
 - 单 server 启动、初始化或发现失败时只关闭该 connection，继续其他 server 且不阻断主对话。成功子进程持续到 `disconnect_all` 或宿主退出；`disconnect_all` 关闭全部 connection、清空 definitions 并重置 manager `_connected`，但不重置 `Agent._mcp_initialized`，且当前 `Agent` 没有自动调用该 teardown。
 - 调用期的未连接、JSON-RPC 或 transport 异常会向上抛出，`tools/call` 没有 timeout：Anthropic 工具路径会把异常转成 tool error 文本，OpenAI 执行路径则可能终止当前 Agent Loop。
