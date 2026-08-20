@@ -75,7 +75,7 @@ flowchart TB
         MANUAL_DONE["REPL /compact 返回<br/>不产生 tool result / context break"]
         TOOL_BREAK["Anthropic / OpenAI 共同行为<br/>_context_cleared = True<br/>工具结果写为新 user message<br/>停止剩余工具 / context break"]
         NEXT_MODEL["◇ 后续模型 API"]
-        NEXT_TOOL_BATCH["后续模型返回 tool call<br/>执行普通 / compact_context 工具批次<br/>完成后回到 NEXT_ITERATION"]
+        NEXT_TOOL_BATCH["后续模型返回 tool call<br/>进入对应工具分支"]
         CHAT_END["主 Agent chat 正常收尾"]
 
         TOOL_RESULT --> LARGE
@@ -136,6 +136,8 @@ flowchart TB
     MODEL -->|compact_context tool| TOOL_FOLD
     NEXT_MODEL -->|final answer / 无 tool call| CHAT_END
     NEXT_MODEL -->|tool call| NEXT_TOOL_BATCH
+    NEXT_TOOL_BATCH -->|普通工具| TOOL_RESULT
+    NEXT_TOOL_BATCH -->|compact_context| TOOL_FOLD
     FIRST_FINAL --> CHAT_END
     MANUAL_DONE -.->|若之后无正常 chat 收尾| MANUAL_BOUNDARY
     MANUAL_DONE -.->|后续主 Agent chat 正常收尾时| CHAT_END
