@@ -1,0 +1,115 @@
+---
+title: 上下文、长期记忆与会话生命周期
+config:
+  theme: base
+  look: classic
+  layout: elk
+  flowchart:
+    curve: basis
+---
+%% Purpose: 展示模型上下文的组装、运行中缩减、structured folding，以及 Session 的持久化与恢复。
+%% Audience: maintainer
+%% Sources: agents/prompt.py, agents/memory.py, agents/agent.py, agents/session_memory.py, agents/session.py, agents/main.py
+%% Anchors: build_system_prompt, start_memory_prefetch, Agent._run_compression_pipeline, Agent._compact_conversation, Agent._auto_save, Agent.restore_session
+%% Out of scope: Skill 执行、权限决策、模型协议请求字段和长期 Memory 写入策略。
+
+flowchart TB
+    accTitle: 上下文、长期记忆与会话生命周期
+    accDescr: 分三个阶段展示系统提示和当前消息如何组成模型上下文，工具结果如何分层缩减并折叠为会话内结构化状态，以及当前消息和折叠记录如何持久化；长期 Memory Markdown 独立于 folded session memory，当前 resume 只恢复 Session JSON 中的后端消息
+
+    subgraph ASSEMBLY["阶段 1 · 上下文组装"]
+        direction TB
+        BASE["系统模板、运行环境与项目指令<br/>cwd / date / platform / shell / Git<br/>CLAUDE.md + includes / .skevo/rules"]
+        CATALOG["静态目录信息<br/>Memory index / Skill 与 Agent 描述<br/>deferred tool names"]
+        SYSTEM["build_system_prompt<br/>+ 可选 Plan prompt<br/>+ Runtime Fold Guidance"]
+        CURRENT["当前 backend messages<br/>本轮 user + 历史 + tool results"]
+        SKILL_CONTEXT["★ retrieved_skills 摘要<br/>追加到本轮 user message"]
+        LONG_MEMORY[("跨 Session 长期 Memory<br/>~/.skevo/projects/&lt;hash&gt;/memory/*.md")]
+        PREFETCH{"主 Agent 且有 side query？<br/>多词输入 / 已注入 &lt; 60 KiB / 存在 Memory？"}
+        INJECT["异步召回最多 5 条<br/>完成后仅注入一次<br/>失败或过迟则不注入"]
+        MODEL["◇ 本轮模型调用上下文"]
+
+        BASE --> SYSTEM
+        CATALOG --> SYSTEM
+        LONG_MEMORY -->|MEMORY.md 索引| CATALOG
+        SYSTEM --> MODEL
+        SKILL_CONTEXT --> CURRENT
+        CURRENT --> MODEL
+        CURRENT --> PREFETCH
+        LONG_MEMORY -.->|后台扫描与读取| INJECT
+        PREFETCH -.->|条件满足则启动 task| INJECT
+        INJECT -.->|模型调用前轮询；追加 user message| CURRENT
+    end
+
+    subgraph REDUCTION["阶段 2 · 运行中缩减与 structured folding"]
+        direction TB
+        TOOL_RESULT["工具执行结果"]
+        LARGE{"UTF-8 结果 &gt; 30 KiB？"}
+        LARGE_STORE[("~/.skevo/tool-results<br/>保存全文；上下文仅保留路径与前 200 行")]
+        NEXT_MESSAGES["写入当前 backend messages<br/>供下一次模型调用"]
+        PIPELINE["每次模型调用前<br/>_run_compression_pipeline"]
+        BUDGET["① 单结果字符预算<br/>利用率 ≥50%：30k chars<br/>利用率 &gt;70%：15k chars"]
+        SNIP["② stale-result snipping<br/>利用率 ≥60%，保留近 3 条<br/>Anthropic 仅 4 类可 snip 工具"]
+        MICRO["③ idle microcompact<br/>距上次 API 调用 ≥5 min<br/>清旧结果并保留近 3 条"]
+        MANUAL["manual：/compact<br/>tool：compact_context"]
+        AUTO["auto：工具批次结束后<br/>last input &gt; 70% effective window"]
+        FOLD_GATE{"对应 messages ≥ 4<br/>且 transcript 非空？"}
+        TRANSCRIPT["OpenAI / Anthropic → transcript<br/>单 block ≤12k；总长 ≤80k chars"]
+        SIDE_QUERY{"side query 可用<br/>且返回 JSON 可解析？"}
+        FALLBACK["⚠ fallback_folded_memory<br/>保留最多 6k transcript 摘要"]
+        FOLDED["folded session state<br/>episode / working / tool memory"]
+        REPLACE["替换当前原始历史<br/>OpenAI：system + folded user<br/>Anthropic：单条 folded user"]
+        READY["更新后的当前 messages<br/>进入下一次模型调用"]
+
+        TOOL_RESULT --> LARGE
+        LARGE -->|是：写入全文| LARGE_STORE
+        LARGE -->|否：保留原结果| NEXT_MESSAGES
+        LARGE_STORE -->|引用 + preview| NEXT_MESSAGES
+        NEXT_MESSAGES --> PIPELINE --> BUDGET --> SNIP --> MICRO --> READY
+        MANUAL --> FOLD_GATE
+        AUTO --> FOLD_GATE
+        FOLD_GATE -->|否| NO_FOLD["不执行 folding"] --> READY
+        FOLD_GATE -->|是| TRANSCRIPT --> SIDE_QUERY
+        SIDE_QUERY -->|是| FOLDED
+        SIDE_QUERY -->|否 / 异常| FALLBACK --> FOLDED
+        FOLDED --> REPLACE --> READY
+    end
+
+    subgraph PERSISTENCE["阶段 3 · 持久化与恢复"]
+        direction TB
+        SESSION[("Session JSON<br/>~/.skevo/sessions/&lt;session_id&gt;.json<br/>backend messages + folded list")]
+        FOLD_LOG[("folded-memory artifacts<br/>项目 .skevo/sessions/<br/>JSONL + latest JSON")]
+        RESUME["--resume：按 startTime 选择 latest<br/>load_session → restore_session<br/>当前仅传入两种 backend messages"]
+        RESTORED["恢复为当前 backend messages<br/>已折叠历史仍以 folded user message 存在"]
+        RESUME_GAP["⚠ 当前恢复缺口<br/>不读取 folded-memory artifacts<br/>也未恢复 Session JSON 的 folded list"]
+
+        READY -->|主 Agent 每次 chat 结束自动保存| SESSION
+        FOLDED -->|先追加记录| FOLD_LOG
+        FOLDED -->|保存在内存列表；随 chat 保存| SESSION
+        SESSION -->|读取| RESUME --> RESTORED
+        FOLD_LOG -.->|当前不参与 resume| RESUME_GAP
+        SESSION -.->|folded list 未传给 restore_session| RESUME_GAP
+    end
+
+    MODEL -->|tool call 执行后| TOOL_RESULT
+    TOOL_RESULT -->|工具批次后检查| AUTO
+
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
+    classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
+
+    class MODEL model
+    class SYSTEM,CURRENT,NEXT_MESSAGES,PIPELINE,BUDGET,SNIP,MICRO,TRANSCRIPT,REPLACE,READY,RESTORED runtime
+    class CATALOG,LONG_MEMORY,INJECT,TOOL_RESULT,LARGE_STORE,FOLDED,SESSION,FOLD_LOG state
+    class PREFETCH,LARGE,MANUAL,AUTO,FOLD_GATE,SIDE_QUERY control
+    class SKILL_CONTEXT extension
+    class FALLBACK,RESUME_GAP error
+    class BASE,NO_FOLD,RESUME external
+
+    style ASSEMBLY fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style REDUCTION fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style PERSISTENCE fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20

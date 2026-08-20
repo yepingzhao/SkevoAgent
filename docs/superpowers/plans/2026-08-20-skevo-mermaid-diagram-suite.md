@@ -567,12 +567,14 @@ config:
 %% Out of scope: Skill 执行、权限决策、模型协议内部请求格式。
 
 flowchart TB
+    accTitle: 上下文、长期记忆与会话生命周期
+    accDescr: 展示系统提示与当前消息的组装、工具结果的分层缩减和结构化折叠，以及 Session 的保存与当前仅恢复后端消息的实际边界
     subgraph ASSEMBLY["上下文组装"]
         STATIC["基础 Prompt 输入<br/>环境 / Git / CLAUDE.md / rules"]
         MANIFEST["Memory index / Skill 与 Agent 描述<br/>deferred tool names"]
         RUNTIME_INPUT["运行时输入<br/>Plan prompt / fold guidance / messages"]
         SKILL_CONTEXT["★ retrieved_skills 摘要"]
-        MEMORY_PREFETCH["◆ 异步长期 Memory 召回"]
+        MEMORY_PREFETCH["◆ 主 Agent 异步长期 Memory 召回<br/>多词输入 / 预算未满 / 存在文件"]
         MODEL_CONTEXT["◇ 当前模型上下文"]
         STATIC --> MODEL_CONTEXT
         MANIFEST --> MODEL_CONTEXT
@@ -584,13 +586,13 @@ flowchart TB
     subgraph REDUCTION["运行中缩减"]
         TOOL_RESULT["工具结果"]
         LARGE["大结果落盘并返回引用"]
-        BUDGET["tool-result byte budgeting"]
-        SNIP["stale result snipping"]
-        MICRO["idle microcompact"]
-        TRIGGER{"manual / tool / auto folding?"}
+        BUDGET["单结果字符预算<br/>利用率 ≥50%：30k；&gt;70%：15k"]
+        SNIP["stale result snipping<br/>利用率 ≥60%，保留近 3 条"]
+        MICRO["idle microcompact<br/>距上次 API 调用 ≥5 min"]
+        TRIGGER{"manual / tool；或工具批次后<br/>last input &gt; 70% auto folding?"}
         TRANSCRIPT["OpenAI / Anthropic transcript"]
-        SIDE_QUERY["side query 生成结构化 memory"]
-        PARSE{"JSON 可解析?"}
+        SIDE_QUERY["side query 生成结构化 memory<br/>不可用或异常也进入 fallback"]
+        PARSE{"调用成功且 JSON 可解析?"}
         FOLDED["episode / working / tool memory"]
         FALLBACK["⚠ fallback_folded_memory"]
         TOOL_RESULT --> LARGE --> BUDGET --> SNIP --> MICRO --> TRIGGER
@@ -601,15 +603,17 @@ flowchart TB
 
     subgraph PERSISTENCE["持久化与恢复"]
         MESSAGES["当前 messages<br/>当前运行上下文"]
-        SESSION[("💾 Session JSON")]
+        SESSION[("💾 Session JSON<br/>backend messages + folded list")]
         FOLD_LOG[("💾 folded-memory JSONL / latest")]
         LONG_MEMORY[("💾 长期 Memory Markdown<br/>跨 Session 项目知识")]
-        RESUME["--resume / restore_session"]
+        RESUME["--resume / restore_session<br/>当前仅传入 backend messages"]
+        RESTORE_GAP["⚠ folded artifacts 不参与 resume<br/>Session folded list 也未恢复"]
         MESSAGES -->|保存| SESSION
         FOLDED -->|替换原历史| MESSAGES
         FOLDED -->|追加 / 写入| FOLD_LOG
         SESSION -->|读取| RESUME
-        FOLD_LOG -->|恢复记录| RESUME
+        FOLD_LOG -.->|当前不读取| RESTORE_GAP
+        SESSION -.->|folded list 未传入| RESTORE_GAP
         LONG_MEMORY -.-> MEMORY_PREFETCH
         RESUME --> MODEL_CONTEXT
     end
@@ -621,12 +625,18 @@ flowchart TB
     classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
     classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
     class MODEL_CONTEXT model
     class STATIC,MANIFEST,RUNTIME_INPUT,MEMORY_PREFETCH,TOOL_RESULT,LARGE,BUDGET,SNIP,MICRO,TRANSCRIPT,SIDE_QUERY,FOLDED,MESSAGES,SESSION,FOLD_LOG,LONG_MEMORY,RESUME state
     class TRIGGER,PARSE control
     class SKILL_CONTEXT extension
     class FALLBACK note
+    class RESTORE_GAP error
+
+    style ASSEMBLY fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style REDUCTION fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style PERSISTENCE fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
 ```
 
 - [ ] **Step 2: Validate and render**

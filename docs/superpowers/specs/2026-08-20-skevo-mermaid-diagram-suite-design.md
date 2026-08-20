@@ -240,10 +240,12 @@ Plan Mode 状态：`--plan` 初始化或显式进入时生成唯一 plan 文件�
 三个数据域：
 
 1. 上下文组装：system template、环境、Git context、`CLAUDE.md`、rules、Memory index、Skill descriptions、custom agents、deferred tool names、Plan Mode prompt、fold guidance、消息历史、Skill 摘要和异步 Memory 注入。
-2. 上下文缩减：大结果持久化、tool-result byte budgeting、stale-result snipping、idle microcompact，以及 manual/tool/auto structured folding。
-3. 持久化与恢复：Session JSON、folded-memory JSONL/latest、长期 Memory Markdown 和 `--resume`。
+2. 上下文缩减：UTF-8 超过 30 KiB 的工具结果落盘并返回引用与前 200 行预览；每次模型调用前依次执行按利用率启用的单结果字符预算、stale-result snipping 和 idle microcompact；manual/tool/auto structured folding 是另一条替换原始消息历史的路径。
+3. 持久化与恢复：Session JSON 保存当前 backend messages 和 folded-memory 内存列表；每次 fold 另向项目 `.skevo/sessions/` 写入 JSONL/latest artifacts；长期 Memory Markdown 位于项目 hash 隔离的用户目录，并不由 folding 生成。
 
-structured folding：OpenAI/Anthropic messages 转为 transcript；side query 生成 episode/working/tool memory；side query 不可用或 JSON 解析失败时使用 fallback。
+structured folding：manual 来自 `/compact`，tool 来自 `compact_context`，auto 只在工具批次结束且上一次模型输入超过 effective window 的 70% 时检查；对应 backend messages 少于 4 条或 transcript 为空时不执行。OpenAI/Anthropic messages 转为 transcript 后，由 side query 生成 episode/working/tool memory；side query 不可用、调用失败或 JSON 解析失败时使用 fallback。成功 folding 会先记录 artifacts，再以 folded user message 替换原始历史；OpenAI 额外保留 system message。
+
+`--resume` 当前按 Session metadata 的 `startTime` 选择 latest Session JSON，并只把 `anthropicMessages` / `openaiMessages` 传给 `Agent.restore_session`。因此已写入消息历史的 folded user message 可以随当前 messages 恢复，但项目 folded-memory artifacts 不参与恢复，Session JSON 中的 `foldedSessionMemories` 列表也没有恢复。图中必须把这一实现缺口标为风险，不得画成完整恢复路径。
 
 必须区分当前 messages、folded session memory、长期 Memory 和 Skill 的作用域。
 
