@@ -921,67 +921,151 @@ title: 在线 Skill 演化闭环
 config:
   theme: base
   look: classic
+  layout: elk
+  elk:
+    mergeEdges: true
+    nodePlacementStrategy: SIMPLE
   flowchart:
     curve: basis
 ---
-%% Purpose: 展示连续对话与用户反馈如何形成 add/merge/discard 决策和审计记录。
+%% Purpose: 展示主 Agent 跨回合 pending window、后台与 /extract_now 入口、候选维护、写入及 provenance 的真实边界。
 %% Audience: both
-%% Sources: agents/agent.py, agents/online_skill_evolution.py, agents/skills.py, agents/skill_evolution.py
-%% Anchors: Agent._set_pending_skill_extraction_window, extract_online_skill_candidate, maintain_online_skill_candidate, online_ingest
-%% Out of scope: replay 评测和 Champion promotion。
+%% Sources: agents/agent.py, agents/online_skill_evolution.py, agents/skills.py, agents/skill_evolution.py, agents/main.py
+%% Anchors: Agent.chat, Agent._set_pending_skill_extraction_window, Agent._pop_pending_skill_extraction_window, Agent.extract_now, extract_online_skill_candidate, maintain_online_skill_candidate, online_ingest, record_online_skill_provenance
+%% Verified: 2026-08-20 against the current Python implementation.
+%% Out of scope: retrieved Skill usage judging/pruning、replay 评测与 Champion promotion。
 
 flowchart TD
-    TURN["本轮用户输入 + assistant reply"]
-    PENDING["保存 pending extraction window"]
-    FEEDBACK["下一轮用户输入作为反馈"]
-    READY["上一窗口成熟"]
-    EXTRACT["Extractor<br/>最多一个 durable candidate"]
-    CANDIDATE{"产生候选?"}
-    NONE["none"]
-    REFERENCES["现有 Skills<br/>identity / BM25 / retrieved reference"]
-    MANAGER["Manager 决策"]
-    RULES["规则修正<br/>exact match → merge<br/>高相似 add → merge<br/>非法 action → discard"]
-    ACTION{"add / merge / discard"}
-    DISCARD["discard"]
-    CONFIRM{"写入权限允许?"}
-    DENIED["❌ add_denied / merge_denied"]
-    ADD["create_skill<br/>项目级 inline Skill"]
-    MERGE["evolve_skill<br/>active Skill 新版本"]
-    AUDIT["版本快照与 lifecycle stats"]
-    PROVENANCE[("💾 provenance log / index")]
-    POLICY["⚠ Plan Mode 不调度后台演化<br/>后台仅 bypassPermissions / acceptEdits 自动写<br/>extract_now 可交互确认"]
+    accTitle: 在线 Skill 演化闭环
+    accDescr: 自上而下展示主 Agent 如何在本轮成功回复后建立 pending window，在下一轮开始时消费并追加用户反馈，再于下一轮成功结束后异步提取候选；也展示 extract_now 的即时路径、Manager 规则修正、写权限、add 与 merge 不同的版本审计顺序，以及并非所有早退和写入异常都能形成 provenance 的实现边界
 
-    TURN --> PENDING
-    FEEDBACK --> READY
-    PENDING --> READY
-    READY --> EXTRACT --> CANDIDATE
-    CANDIDATE -->|否| NONE --> PROVENANCE
-    CANDIDATE -->|是| MANAGER
-    REFERENCES --> MANAGER
-    MANAGER --> RULES --> ACTION
-    ACTION -->|discard / 非法 action| DISCARD --> PROVENANCE
-    ACTION -->|add / merge| CONFIRM
-    POLICY -.-> CONFIRM
-    CONFIRM -->|否| DENIED --> PROVENANCE
-    CONFIRM -->|add| ADD --> AUDIT
-    CONFIRM -->|merge| MERGE --> AUDIT
-    AUDIT --> PROVENANCE
+    subgraph WINDOW["A · 跨回合 pending window 生命周期"]
+        direction TB
+        CHAT_START["👤 主 Agent 收到第 N+1 轮输入"]
+        POP{"存在第 N 轮 pending window?"}
+        CONSUME["立即取出并清空单槽 pending<br/>追加第 N+1 轮原始 user input 作为 feedback<br/>messages 最多保留 10 条"]
+        CURRENT_TURN["执行第 N+1 轮 Agent.chat"]
+        TURN_OK{"本轮未 aborted?"}
+        OLD_READY{"已消费的旧窗口存在?"}
+        READY["上一窗口成熟<br/>等待后台调度"]
+        SCHEDULE_GATE{"调度时 permission_mode = plan?"}
+        CLOSED["关闭演化协程并返回<br/>不产生 provenance"]
+        TASK_STARTED["create_task 后 scheduler 立即返回"]
+        LOST["⚠ 若已取出旧窗口则该窗口丢失<br/>不调度，也不建立新窗口"]
+        NEW_WINDOW{"原始 user input 与<br/>assistant 输出都非空?"}
+        SET_PENDING["保存新的单槽 pending<br/>最近 user/assistant 消息最多 8 条<br/>latest pair + session_id + 本轮 top reference"]
+        NO_PENDING["不保存本轮窗口<br/>下一轮无该窗口可消费"]
+
+        CHAT_START --> POP
+        POP -->|否| CURRENT_TURN
+        POP -->|是：先消费| CONSUME --> CURRENT_TURN
+        CURRENT_TURN --> TURN_OK
+        TURN_OK -->|否| LOST
+        TURN_OK -->|是| OLD_READY
+        OLD_READY -->|是| READY --> SCHEDULE_GATE
+        OLD_READY -->|否| NEW_WINDOW
+        SCHEDULE_GATE -->|是| CLOSED --> NEW_WINDOW
+        SCHEDULE_GATE -->|否| TASK_STARTED --> NEW_WINDOW
+        NEW_WINDOW -->|是| SET_PENDING
+        NEW_WINDOW -->|否| NO_PENDING
+    end
+
+    subgraph ENTRY["B · 后台与即时入口；共同进入运行 gate"]
+        direction TB
+        BACKGROUND["后台执行 _run_online_skill_evolution<br/>不阻断第 N+1 轮 chat 收尾"]
+        EXTRACT_NOW["/extract_now [hint]<br/>复制当前 pending，await 即时执行<br/>正常返回后清空该 pending"]
+        HAS_MANUAL{"当前有 pending?"}
+        MANUAL_NONE["❌ 返回 no pending 错误"]
+        RUN_GATE{"auto evolution 开启、非 Plan Mode、<br/>messages 非空，且 side query / import 可用?"}
+        SILENT_RETURN["⚠ ingest 前直接返回<br/>不写 provenance<br/>extract_now 仍报告 ok 并清空窗口"]
+
+        EXTRACT_NOW --> HAS_MANUAL
+        HAS_MANUAL -->|否| MANUAL_NONE
+        HAS_MANUAL -->|是：带可选 hint| RUN_GATE
+        BACKGROUND --> RUN_GATE
+        RUN_GATE -->|否| SILENT_RETURN
+    end
+
+    subgraph INGEST["C · Extractor、参考集与 Manager 规则修正"]
+        direction TB
+        EXTRACTOR["◇ Extractor side query<br/>user 为主要证据；assistant 仅作上下文<br/>retrieved reference 仅作 identity context"]
+        CANDIDATE{"首个 candidate 可被校验?<br/>必需 name / description / instructions<br/>最多保留 1 个；tags 最多 8 个"}
+        NONE["none"]
+        REFERENCES["现有参考集<br/>discover 当前缓存 Skills；exact identity 比较<br/>name / description / when-to-use<br/>candidate BM25：limit 8，min score 0.03<br/>另带上一轮 top retrieved reference"]
+        MANAGER["◇ Manager side query<br/>接收 candidate、similar hits、reference<br/>及前 80 个现有 Skill 内容摘要"]
+        FIX_RULES["确定性规则修正<br/>exact identity 强制 merge<br/>Manager add 且 top score ≥ 0.55 → merge<br/>merge 缺 target 时尝试 top reference<br/>非法 action → discard"]
+        ACTION{"最终 action?"}
+        DISCARD["discard"]
+        FAILED["failed<br/>Extractor / Manager / 写调用抛异常"]
+
+        RUN_GATE -->|是| EXTRACTOR
+        EXTRACTOR --> CANDIDATE
+        EXTRACTOR -->|调用或解析抛异常| FAILED
+        CANDIDATE -->|否| NONE
+        CANDIDATE -->|是| REFERENCES --> MANAGER --> FIX_RULES --> ACTION
+        MANAGER -->|调用或解析抛异常| FAILED
+        ACTION -->|discard| DISCARD
+    end
+
+    subgraph WRITE["D · 写入权限、版本与审计顺序"]
+        direction TB
+        CONFIRM{"add / merge 写入获准?"}
+        POLICY["写门禁基于执行时 permission_mode<br/>后台：仅 bypassPermissions / acceptEdits 自动允许<br/>extract_now：上述模式允许；default 可调用 confirm_fn<br/>dontAsk 拒绝；Plan Mode 已在运行 gate 返回"]
+        DENIED["❌ add_denied / merge_denied"]
+        WRITE_KIND{"add 或 merge?"}
+        ADD["add：create_skill<br/>SKEVO_AUTO_SKILL_TARGET，默认 project<br/>创建 inline、user-invocable=false 的 SKILL.md<br/>frontmatter version = 0.1.0"]
+        MERGE["merge：evolve_skill target=active<br/>先写旧内容 snapshot<br/>再 patch +1、last-evolved、evolution-count<br/>写回现有 SKILL.md"]
+        USAGE["写 usage.jsonl（lifecycle stats 来源）<br/>add → create event；merge → evolve event<br/>成功后 reset discovery cache"]
+        NORMAL_ERROR["❌ 正常错误返回仍保留<br/>action = add / merge，ok = false<br/>例如同名已存在或 merge target 缺失"]
+        PROVENANCE["💾 online provenance 尝试<br/>先追加 online_provenance.jsonl<br/>再按非空 skill 更新 index；merge 成功结果<br/>含 version 并进入 timeline，add 结果不含 version"]
+        REFRESH["成功 add / merge 后调用 prompt refresh<br/>默认主 Agent 重建 runtime system prompt<br/>custom system prompt 时为 no-op"]
+        AUDIT_GAP["⚠ provenance 写入本身未捕获<br/>log append 失败：无 log/index；index 失败：仅有 log<br/>后台 done callback 吞异常；写成功后不再 refresh<br/>extract_now 会抛出且 pending 不执行后续清空"]
+
+        ACTION -->|add / merge| CONFIRM
+        POLICY --> CONFIRM
+        CONFIRM -->|否| DENIED
+        CONFIRM -->|是| WRITE_KIND
+        WRITE_KIND -->|add| ADD
+        WRITE_KIND -->|merge| MERGE
+        ADD -->|成功| USAGE
+        MERGE -->|成功| USAGE
+        ADD -->|校验错误，未抛异常| NORMAL_ERROR
+        MERGE -->|校验错误，未抛异常| NORMAL_ERROR
+        USAGE -->|ok = true| PROVENANCE
+        NORMAL_ERROR --> PROVENANCE
+        NONE --> PROVENANCE
+        DISCARD --> PROVENANCE
+        DENIED --> PROVENANCE
+        FAILED --> PROVENANCE
+        PROVENANCE -->|ok 且 add / merge| REFRESH
+        PROVENANCE -->|写 log / index 抛异常| AUDIT_GAP
+    end
+
+    TASK_STARTED -.->|真正异步；仅主 Agent| BACKGROUND
+    SET_PENDING -->|用户可在下一次 chat 前手动提取| EXTRACT_NOW
 
     classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef model fill:#DDF4FF,stroke:#0B6B8A,stroke-width:2px,color:#073B4C
     classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
     classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
     classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
-    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
-    class TURN,FEEDBACK actor
-    class PENDING,READY,EXTRACT,MANAGER runtime
-    class REFERENCES,AUDIT,PROVENANCE state
-    class CANDIDATE,RULES,ACTION,CONFIRM control
-    class NONE,DISCARD,ADD,MERGE extension
-    class DENIED error
-    class POLICY note
+    class CHAT_START actor
+    class CONSUME,CURRENT_TURN,READY,CLOSED,TASK_STARTED,SET_PENDING,BACKGROUND,EXTRACT_NOW,ADD,MERGE,USAGE,REFRESH runtime
+    class EXTRACTOR,MANAGER model
+    class REFERENCES,PROVENANCE state
+    class POP,TURN_OK,OLD_READY,NEW_WINDOW,SCHEDULE_GATE,HAS_MANUAL,RUN_GATE,CANDIDATE,ACTION,CONFIRM,WRITE_KIND control
+    class NONE,DISCARD,FIX_RULES extension
+    class POLICY,SILENT_RETURN,NO_PENDING note
+    class LOST,MANUAL_NONE,FAILED,DENIED,NORMAL_ERROR,AUDIT_GAP error
+
+    style WINDOW fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style ENTRY fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style INGEST fill:#FAF7FF,stroke:#7040A8,stroke-width:2px,color:#32184F
+    style WRITE fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
 ```
 
 - [ ] **Step 2: Validate and render**
@@ -990,7 +1074,7 @@ flowchart TD
 mmdc -i docs/diagrams/mmd/07-skill-evolution.mmd -o /tmp/07-skill-evolution.svg -b white
 ```
 
-Expected: exit code 0; every terminal action reaches provenance; the policy note is non-blocking and visually secondary.
+Expected: exit code 0；后台边只用于真实 `create_task`；ingest 内终态都到达 provenance 尝试，同时明确标出 ingest 前早退与 provenance 自身失败的审计缺口。
 
 - [ ] **Step 3: Commit**
 

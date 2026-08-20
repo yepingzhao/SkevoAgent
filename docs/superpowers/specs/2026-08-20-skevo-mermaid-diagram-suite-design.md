@@ -288,15 +288,17 @@ OpenAI/Anthropic messages 转为 transcript 时，普通 message content 按 12k
 读者：访客与维护者
 目的：展示连续对话与用户反馈如何形成可复用 Skill 变更。
 
-主路径：当前用户输入和回复形成 pending window；下一轮输入使上一窗口成熟；Extractor 最多提取一个 durable candidate；Manager 结合 identity、BM25 similarity、retrieved reference 和现有内容决策 add/merge/discard。
+跨回合窗口只存在于主 Agent 的单槽内：第 N 轮未中止且原始用户输入、assistant 输出均非空时，以最近最多 8 条 user/assistant 消息、latest pair、session ID 和去掉 `all_hits` 的 top retrieved reference 建立 pending window。第 N+1 轮 `chat` 开始时，运行时立即取出并清空该窗口，将第 N+1 轮原始用户输入作为 feedback 追加，截断到最多 10 条；只有第 N+1 轮也未中止时，成熟窗口才在该轮回复完成后由后台任务调度。若第 N+1 轮中止，已弹出的窗口会丢失。Plan Mode 仍会消费和重建窗口，但后台调度器会关闭协程；子 Agent 不参与该窗口生命周期。
 
-规则：exact match 强制 merge；高相似度 add 改为 merge；非法 action 降级为 discard。
+后台入口在调度时若为 Plan Mode 会直接关闭协程，否则使用 `create_task`，且不阻断当前 `chat` 收尾；`/extract_now [hint]` 则复制当前 pending window、await 即时路径，并在调用正常返回后清空 pending。两条路径都先检查 `SKEVO_AUTO_SKILL_EVOLUTION`、非 Plan Mode、非空 messages、side query 和模块导入；未通过时在进入 `online_ingest` 前直接返回，因此不写 provenance。`/extract_now` 在这种早退下仍返回 `ok` 并清空窗口。Extractor 以 user turns 为主要证据，最多读取返回列表中的第一个 candidate，并要求 `name`、`description`、`instructions` 非空。
 
-写入门禁：Plan Mode 不调度后台演化；后台只在 `bypassPermissions`/`acceptEdits` 下自动允许；`/extract_now` 可交互确认。
+Manager 同时接收：通过 normalized name/description/when-to-use 得到的 exact identity target；candidate query 对当前发现缓存执行 BM25 检索所得的最多 8 个命中（`min_score=0.03`）；上一轮 top retrieved reference；以及最多前 80 个现有 Skill 的内容摘要。exact identity 强制 merge；Manager 选择 add 且 top similarity `>= 0.55` 时强制 merge；merge 未给 target 时尝试 top retrieved reference；非法 action 降级为 discard。缺少最终 merge target 会作为 `action=merge, ok=false` 的正常错误返回，而不是改写为 `failed`。
 
-所有 `none`、`discard`、`denied`、`failed`、`add`、`merge` 均记录 provenance。成功路径调用 `create_skill` 或 `evolve_skill`，并保留版本快照和生命周期统计。
+写入门禁读取执行时的 permission mode：后台只在 `bypassPermissions` / `acceptEdits` 下允许 add/merge；`/extract_now` 在这两种模式下自动允许，在 `default` 下可调用 `confirm_fn`，在 `dontAsk` 下拒绝；Plan Mode 已在前置 gate 返回。add 调用 `create_skill`，目标来自 `SKEVO_AUTO_SKILL_TARGET`（默认 project），创建 inline、不可用户显式调用且 frontmatter version 为 `0.1.0` 的 Skill；成功后写 create event 并 reset discovery cache，但返回结果不含 version。merge 调用 `evolve_skill(target="active")`，先把旧内容写入 history snapshot，再增加 patch version、`last-evolved` 和 `evolution-count`，写回 Skill，随后写 evolve event 并 reset cache；成功结果包含 version。
 
-权威锚点：`Agent._set_pending_skill_extraction_window`、`Agent._pop_pending_skill_extraction_window`、`extract_online_skill_candidate`、`maintain_online_skill_candidate`、`online_ingest`、`record_online_skill_provenance`。
+进入 `online_ingest` 后，Extractor/Manager/写调用抛出的异常以 `failed` 尝试记录；candidate 为空、discard、denied，以及 add/merge 的成功或正常错误返回也都会尝试写 `online_provenance.jsonl`，再对非空 skill 更新 provenance index。只有 merge 成功结果当前携带 version 并进入 index timeline；add 的 `0.1.0` 不进入该 timeline。provenance 写入本身没有异常保护，因此不能保证每个终态都有 log/index；后台 done callback 会吞掉这类异常，且写入已成功但 provenance 失败时不会继续刷新 runtime system prompt。即时路径会让异常继续抛出，`extract_now` 后续清空 pending 的语句也不会执行。图中必须把 ingest 前静默早退、写入正常错误与这一审计缺口画成实现边界，不能将它们归纳成理想化的完整审计闭环。
+
+权威锚点：`Agent.chat`、`Agent._set_pending_skill_extraction_window`、`Agent._pop_pending_skill_extraction_window`、`Agent._run_online_skill_evolution`、`Agent.extract_now`、`extract_online_skill_candidate`、`maintain_online_skill_candidate`、`online_ingest`、`record_online_skill_provenance`。
 
 ### 6.8 `08-skill-evaluation.mmd`
 
