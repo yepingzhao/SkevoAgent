@@ -99,10 +99,10 @@ flowchart TB
     RUNTIME -->|首次主 chat| LAZY
     RUNTIME -->|获准的<br/>mcp__server__tool| MCP_DISPATCH
     RUNTIME -->|agent tool /<br/>Skill fork| ENTRY
-    RUNTIME <---|成功发现：<br/>追加 self.tools| DEFINITIONS
-    RUNTIME <---|tool result| MCP_RETURN
-    RUNTIME <---|文本 +<br/>token 增量| CHILD_RESULT
-    RUNTIME <---|错误文本| CHILD_FAIL
+    RUNTIME returnDefinitions@<-->|成功发现：<br/>追加 self.tools| DEFINITIONS
+    RUNTIME returnMcpResult@<-->|tool result| MCP_RETURN
+    RUNTIME returnChildSuccess@<-->|文本 +<br/>token 增量| CHILD_RESULT
+    RUNTIME returnChildError@<-->|错误文本| CHILD_FAIL
 
     %% A / B 边界由 Runtime 的调用边独立定位；风险注记不表达控制流。
 
@@ -113,6 +113,7 @@ flowchart TB
     classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
     classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef returnEdge marker-end:none
 
     class RUNTIME runtime
     class CONFIG,DEFINITIONS,MCP_RETURN,TYPE_CONFIG,AGENT_TOOLS,SKILL_CONFIG,SKILL_TOOLS,PERMISSION,ISOLATION,AWAIT,CHILD_RESULT state
@@ -122,6 +123,7 @@ flowchart TB
     class PROCESS external
     class MCP_RISK,SUB_RISK note
     class INIT_FAIL,CHILD_FAIL error
+    class returnDefinitions,returnMcpResult,returnChildSuccess,returnChildError returnEdge
 
     style MCP_LANE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     style MCP_CLIENT fill:#F4FBF5,stroke:#26733D,stroke-width:2px,color:#123D20
