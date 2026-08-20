@@ -2,7 +2,7 @@
 
 ## Context
 
-BearCode is a Python 3.11+ command-line application managed by `uv`. The installed `bear-code` console command and the supported module command both enter the same `agents.main:main` function. The repository currently has no shared `.vscode` configuration, so developers must select the project interpreter and recreate launch arguments manually before they can use breakpoints.
+Skevo is a Python 3.11+ command-line application managed by `uv`. The installed `skevo` console command and the supported module command both enter the same `agents.main:main` function. The repository currently has no shared `.vscode` configuration, so developers must select the project interpreter and recreate launch arguments manually before they can use breakpoints.
 
 The shared configuration will make the project directly debuggable in VS Code while preserving `uv` as the environment manager. VS Code will attach its Python debugger to the application module itself rather than to the generated console-script wrapper or the `uv` parent process.
 
@@ -18,7 +18,7 @@ The shared configuration will make the project directly debuggable in VS Code wh
 
 ## Non-goals
 
-- Debugging the generated `.venv/bin/bear-code` wrapper.
+- Debugging the generated `.venv/bin/skevo` wrapper.
 - Starting the debugger through `uv run` or attaching to an uv child process.
 - Adding API keys, endpoint URLs, model names, or other personal settings to `.vscode`.
 - Adding pytest or changing the existing standard-library `unittest` suite.
@@ -39,7 +39,7 @@ All four files will use strict JSON without comments so they can also be validat
 
 ## Interpreter and Environment
 
-Set `python.defaultInterpreterPath` to `${workspaceFolder}/.venv/bin/python`. BearCode officially targets macOS and Linux, and uv creates its project environment at this path by default.
+Set `python.defaultInterpreterPath` to `${workspaceFolder}/.venv/bin/python`. Skevo officially targets macOS and Linux, and uv creates its project environment at this path by default.
 
 Every application launch profile will:
 
@@ -48,7 +48,7 @@ Every application launch profile will:
 - set `cwd` to `${workspaceFolder}` so `.env`, project Skills, sessions, and relative paths resolve from the repository root;
 - set `envFile` to `${workspaceFolder}/.env`;
 - use `integratedTerminal` for standard input and signal behavior;
-- keep `justMyCode` enabled so normal stepping stays within BearCode unless the developer explicitly enters dependency code.
+- keep `justMyCode` enabled so normal stepping stays within Skevo unless the developer explicitly enters dependency code.
 
 The configuration will not duplicate `.env` values in an `env` object. Missing or incomplete provider credentials will continue to fail through the application's existing runtime behavior.
 
@@ -56,9 +56,9 @@ The configuration will not duplicate `.env` values in an `env` object. Missing o
 
 `launch.json` will contain these profiles:
 
-1. `Bear Code: Interactive REPL` launches `agents.main` without arguments.
-2. `Bear Code: One-shot Prompt` launches `agents.main` with a prompt collected through a VS Code input variable.
-3. `Bear Code: Plan Mode` launches `agents.main` with `--plan` followed by a prompt collected through a separate input variable.
+1. `Skevo: Interactive REPL` launches `agents.main` without arguments.
+2. `Skevo: One-shot Prompt` launches `agents.main` with a prompt collected through a VS Code input variable.
+3. `Skevo: Plan Mode` launches `agents.main` with `--plan` followed by a prompt collected through a separate input variable.
 4. `Tests: Current File` launches `unittest` for `${relativeFile}` with verbose output. This profile is intended for a currently open `tests/test_*.py` file.
 5. `Tests: All` launches `unittest discover -s tests -p test_*.py -v`.
 

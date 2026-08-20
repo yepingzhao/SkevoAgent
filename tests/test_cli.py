@@ -14,9 +14,9 @@ class CliContractTests(unittest.TestCase):
     def test_console_script_targets_main(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-        self.assertEqual(project["project"]["scripts"]["bear-code"], "agents.main:main")
+        self.assertEqual(project["project"]["scripts"]["skevo"], "agents.main:main")
 
-    def test_help_uses_bear_code_name(self) -> None:
+    def test_help_uses_skevo_name(self) -> None:
         completed = subprocess.run(
             [sys.executable, "-m", "agents.main", "--help"],
             cwd=ROOT,
@@ -27,7 +27,7 @@ class CliContractTests(unittest.TestCase):
         output = completed.stdout + completed.stderr
 
         self.assertEqual(completed.returncode, 0, output)
-        self.assertIn("Usage: bear-code", output)
+        self.assertIn("Usage: skevo", output)
         self.assertNotIn("mini-claude", output)
 
 

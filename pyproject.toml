@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bear-code"
+name = "skevo"
 version = "0.1.0"
 description = "A self-evolving harness agent runtime"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bear-code = "agents.main:main"
+skevo = "agents.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agents"]

@@ -41,8 +41,8 @@ from .online_skill_eval import format_online_skill_eval_async
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="bear-code",
-        description="Bear Code — a minimal coding agent",
+        prog="skevo",
+        description="Skevo — a self-evolving coding agent",
         add_help=False,
     )
     parser.add_argument("prompt", nargs="*", help="One-shot prompt")
@@ -224,7 +224,7 @@ async def run_repl(agent: Agent) -> None:
         if inp == "/skills":
             skills = discover_skills()
             if not skills:
-                print_info("No skills found. Add skills to .bear/skills/<name>/SKILL.md")
+                print_info("No skills found. Add skills to .skevo/skills/<name>/SKILL.md")
             else:
                 print_skill_entries(skills)
             continue
@@ -330,9 +330,9 @@ def main() -> None:
     _load_env_file()
 
     if args.help:
-        # 自定义帮助文本，展示 Bear Code 支持的启动参数和 REPL 内置命令。
+        # 自定义帮助文本，展示 Skevo 支持的启动参数和 REPL 内置命令。
         print("""
-Usage: bear-code [options] [prompt]
+Usage: skevo [options] [prompt]
 
 Options:
   --yolo, -y          Skip all confirmation prompts (bypassPermissions mode)
@@ -363,14 +363,14 @@ REPL commands:
   /<skill-name>       Invoke a skill (e.g. /commit "fix types")
 
 Examples:
-  bear-code "fix the bug in src/app.ts"
-  bear-code --yolo "run all tests and fix failures"
-  bear-code --plan "how would you refactor this?"
-  bear-code --max-cost 0.50 --max-turns 20 "implement feature X"
-  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic bear-code "hello"
-  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 bear-code "hello"
-  bear-code --resume
-  bear-code  # starts interactive REPL
+  skevo "fix the bug in src/app.ts"
+  skevo --yolo "run all tests and fix failures"
+  skevo --plan "how would you refactor this?"
+  skevo --max-cost 0.50 --max-turns 20 "implement feature X"
+  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic skevo "hello"
+  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 skevo "hello"
+  skevo --resume
+  skevo  # starts interactive REPL
 """)
         sys.exit(0)
 

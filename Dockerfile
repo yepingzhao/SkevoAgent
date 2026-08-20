@@ -47,4 +47,4 @@ COPY .mcp.json /workspace/.mcp.json
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/app/.venv/bin/bear-code"]
+ENTRYPOINT ["/app/.venv/bin/skevo"]

@@ -2,7 +2,7 @@
 
 ## Context
 
-BearCode renders two kinds of terminal output through different mechanisms. Model text and Thinking deltas stream through `sys.stdout.write()` without an automatic line ending, while Tool Call, Tool Result, Cost, Info, Error, and other structured blocks render through Rich's `Console.print()`. Rich cannot infer that a preceding raw write left the cursor in the middle of a line.
+Skevo renders two kinds of terminal output through different mechanisms. Model text and Thinking deltas stream through `sys.stdout.write()` without an automatic line ending, while Tool Call, Tool Result, Cost, Info, Error, and other structured blocks render through Rich's `Console.print()`. Rich cannot infer that a preceding raw write left the cursor in the middle of a line.
 
 This produces visible boundary defects when the model's final streamed chunk has no trailing newline:
 

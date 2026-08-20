@@ -6,7 +6,7 @@
 
 ## Problem
 
-Bear Code can stream Anthropic-compatible Thinking content and final answer text in the same response. The current handler uses one `first_text` flag for both delta types. The first Thinking delta clears that flag, so the first final-text delta no longer creates its own output boundary.
+Skevo can stream Anthropic-compatible Thinking content and final answer text in the same response. The current handler uses one `first_text` flag for both delta types. The first Thinking delta clears that flag, so the first final-text delta no longer creates its own output boundary.
 
 For an event sequence equivalent to:
 

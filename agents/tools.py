@@ -117,7 +117,7 @@ tool_definitions: list[ToolDef] = [
     },
     {
         "name": "skill",
-        "description": "Invoke a registered skill by name. Skills are prompt templates loaded from .bear/skills/. Returns the skill's resolved prompt to follow.",
+        "description": "Invoke a registered skill by name. Skills are prompt templates loaded from .skevo/skills/. Returns the skill's resolved prompt to follow.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -565,8 +565,8 @@ def load_permission_rules() -> dict:
     allow: list[dict] = []
     deny: list[dict] = []
 
-    user_settings = _load_settings(Path.home() / ".bear" / "settings.json")
-    project_settings = _load_settings(Path.cwd() / ".bear" / "settings.json")
+    user_settings = _load_settings(Path.home() / ".skevo" / "settings.json")
+    project_settings = _load_settings(Path.cwd() / ".skevo" / "settings.json")
 
     for settings in [user_settings, project_settings]:
         if not settings or "permissions" not in settings:

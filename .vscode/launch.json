@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Bear Code: Interactive REPL",
+      "name": "Skevo: Interactive REPL",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
@@ -12,12 +12,12 @@
       "justMyCode": true
     },
     {
-      "name": "Bear Code: One-shot Prompt",
+      "name": "Skevo: One-shot Prompt",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
       "args": [
-        "${input:bearCodePrompt}"
+        "${input:skevoPrompt}"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
@@ -25,13 +25,13 @@
       "justMyCode": true
     },
     {
-      "name": "Bear Code: Plan Mode",
+      "name": "Skevo: Plan Mode",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
       "args": [
         "--plan",
-        "${input:bearCodePlanPrompt}"
+        "${input:skevoPlanPrompt}"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
@@ -73,13 +73,13 @@
   ],
   "inputs": [
     {
-      "id": "bearCodePrompt",
+      "id": "skevoPrompt",
       "type": "promptString",
       "description": "Prompt to run once",
       "default": "Summarize this project"
     },
     {
-      "id": "bearCodePlanPrompt",
+      "id": "skevoPlanPrompt",
       "type": "promptString",
       "description": "Prompt to analyze in Plan Mode",
       "default": "Analyze how to improve this project"

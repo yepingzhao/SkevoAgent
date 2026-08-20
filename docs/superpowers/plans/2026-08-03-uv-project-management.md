@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Package the existing `agents` application in place, make `uv` the sole dependency manager, expose a formal `bear-code` CLI, and use the same locked environment locally and in Docker.
+**Goal:** Package the existing `agents` application in place, make `uv` the sole dependency manager, expose a formal `skevo` CLI, and use the same locked environment locally and in Docker.
 
 **Architecture:** A PEP 621 `pyproject.toml` describes the application and its five runtime dependencies, Hatchling builds the existing `agents` package, and a committed `uv.lock` provides reproducibility. The console script and `python -m` compatibility path both call `agents.main:main`; Docker installs the same lock file into `/app/.venv` and runs that console script directly.
 
@@ -24,7 +24,7 @@
 - Create `agents/__init__.py`: mark the existing runtime directory as an explicit package.
 - Create `tests/__init__.py`: make test discovery deterministic.
 - Create `tests/test_cli.py`: network-free regression coverage for CLI naming and console-script metadata.
-- Modify `agents/main.py`: replace the legacy `mini-claude` program name and help examples with `bear-code`.
+- Modify `agents/main.py`: replace the legacy `mini-claude` program name and help examples with `skevo`.
 - Modify `Dockerfile`: install pinned uv, sync the locked environment in cacheable layers, and run the installed console script.
 - Modify `README.md`: document uv setup, execution, locking, and dependency maintenance.
 - Delete `requirements.txt`: remove the duplicate dependency source.
@@ -42,7 +42,7 @@
 Create `agents/__init__.py` with exactly:
 
 ```python
-"""BearCode agent runtime package."""
+"""Skevo agent runtime package."""
 ```
 
 - [ ] **Step 2: Add the initial PEP 621 project declaration**
@@ -55,7 +55,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bear-code"
+name = "skevo"
 version = "0.1.0"
 description = "A self-evolving harness agent runtime"
 readme = "README.md"
@@ -84,7 +84,7 @@ Run:
 uv lock
 ```
 
-Expected: exit 0 and a new `uv.lock` whose root package is `bear-code==0.1.0` and whose `requires-python` is `>=3.11`.
+Expected: exit 0 and a new `uv.lock` whose root package is `skevo==0.1.0` and whose `requires-python` is `>=3.11`.
 
 - [ ] **Step 5: Recreate the project environment from the lock**
 
@@ -94,7 +94,7 @@ Run:
 uv sync --locked
 ```
 
-Expected: exit 0, `.venv` is created or updated, the five direct dependencies import successfully, and the editable `bear-code` project installs without packaging errors.
+Expected: exit 0, `.venv` is created or updated, the five direct dependencies import successfully, and the editable `skevo` project installs without packaging errors.
 
 - [ ] **Step 6: Verify metadata and imports**
 
@@ -120,7 +120,7 @@ git commit -m "build: migrate dependency management to uv"
 
 Expected: the commit contains only the package marker, project metadata, lock file, and `requirements.txt` deletion.
 
-### Task 2: Add the Formal `bear-code` CLI with Test-First Coverage
+### Task 2: Add the Formal `skevo` CLI with Test-First Coverage
 
 **Files:**
 - Create: `tests/__init__.py`
@@ -150,9 +150,9 @@ class CliContractTests(unittest.TestCase):
     def test_console_script_targets_main(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-        self.assertEqual(project["project"]["scripts"]["bear-code"], "agents.main:main")
+        self.assertEqual(project["project"]["scripts"]["skevo"], "agents.main:main")
 
-    def test_help_uses_bear_code_name(self) -> None:
+    def test_help_uses_skevo_name(self) -> None:
         completed = subprocess.run(
             [sys.executable, "-m", "agents.main", "--help"],
             cwd=ROOT,
@@ -163,7 +163,7 @@ class CliContractTests(unittest.TestCase):
         output = completed.stdout + completed.stderr
 
         self.assertEqual(completed.returncode, 0, output)
-        self.assertIn("Usage: bear-code", output)
+        self.assertIn("Usage: skevo", output)
         self.assertNotIn("mini-claude", output)
 
 
@@ -179,7 +179,7 @@ Run:
 uv run python -m unittest tests.test_cli -v
 ```
 
-Expected: `test_console_script_targets_main` errors because `project["scripts"]` does not exist, and `test_help_uses_bear_code_name` fails because the help examples still contain `mini-claude`.
+Expected: `test_console_script_targets_main` errors because `project["scripts"]` does not exist, and `test_help_uses_skevo_name` fails because the help examples still contain `mini-claude`.
 
 - [ ] **Step 3: Register the console script**
 
@@ -187,17 +187,17 @@ Add this block immediately after `[project]` dependencies and before `[tool.hatc
 
 ```toml
 [project.scripts]
-bear-code = "agents.main:main"
+skevo = "agents.main:main"
 ```
 
-- [ ] **Step 4: Make `bear-code` the only user-facing CLI name**
+- [ ] **Step 4: Make `skevo` the only user-facing CLI name**
 
 In `agents/main.py`, change the parser declaration to:
 
 ```python
 parser = argparse.ArgumentParser(
-    prog="bear-code",
-    description="Bear Code — a minimal coding agent",
+    prog="skevo",
+    description="Skevo — a minimal coding agent",
     add_help=False,
 )
 ```
@@ -205,14 +205,14 @@ parser = argparse.ArgumentParser(
 Replace the eight example lines in the custom help block with:
 
 ```text
-  bear-code "fix the bug in src/app.ts"
-  bear-code --yolo "run all tests and fix failures"
-  bear-code --plan "how would you refactor this?"
-  bear-code --max-cost 0.50 --max-turns 20 "implement feature X"
-  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic bear-code "hello"
-  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 bear-code "hello"
-  bear-code --resume
-  bear-code  # starts interactive REPL
+  skevo "fix the bug in src/app.ts"
+  skevo --yolo "run all tests and fix failures"
+  skevo --plan "how would you refactor this?"
+  skevo --max-cost 0.50 --max-turns 20 "implement feature X"
+  MODEL=deepseek-chat APIKEY=sk-xxx API=https://api.deepseek.com/anthropic skevo "hello"
+  MODEL=gpt-4o OPENAI_API_KEY=sk-xxx OPENAI_BASE_URL=https://aihubmix.com/v1 skevo "hello"
+  skevo --resume
+  skevo  # starts interactive REPL
 ```
 
 - [ ] **Step 5: Refresh the editable installation without changing dependency resolution**
@@ -224,7 +224,7 @@ uv lock --check
 uv sync --locked
 ```
 
-Expected: both commands exit 0 and the local `.venv/bin/bear-code` is registered by the editable installation.
+Expected: both commands exit 0 and the local `.venv/bin/skevo` is registered by the editable installation.
 
 - [ ] **Step 6: Run the tests and CLI smoke checks**
 
@@ -232,11 +232,11 @@ Run:
 
 ```bash
 uv run python -m unittest tests.test_cli -v
-uv run bear-code --help
+uv run skevo --help
 uv run python -m agents.main --help
 ```
 
-Expected: two tests pass; both help commands exit 0, start with `Usage: bear-code`, and contain no `mini-claude` text.
+Expected: two tests pass; both help commands exit 0, start with `Usage: skevo`, and contain no `mini-claude` text.
 
 - [ ] **Step 7: Commit the tested console entry point**
 
@@ -245,7 +245,7 @@ Run:
 ```bash
 git add tests/__init__.py tests/test_cli.py pyproject.toml agents/main.py
 git diff --cached --check
-git commit -m "feat(cli): add bear-code console entry point"
+git commit -m "feat(cli): add skevo console entry point"
 ```
 
 Expected: the commit contains only the tests, console metadata, and CLI naming changes.
@@ -306,7 +306,7 @@ RUN uv sync --locked --no-dev
 Replace the final entry point with:
 
 ```dockerfile
-ENTRYPOINT ["/app/.venv/bin/bear-code"]
+ENTRYPOINT ["/app/.venv/bin/skevo"]
 ```
 
 Keep `WORKDIR /workspace` and the `.mcp.json` copy exactly as they are.
@@ -316,7 +316,7 @@ Keep `WORKDIR /workspace` and the `.mcp.json` copy exactly as they are.
 Run:
 
 ```bash
-rg -n "uv:0\.10\.9|uv sync --locked --no-dev|/app/\.venv/bin/bear-code" Dockerfile
+rg -n "uv:0\.10\.9|uv sync --locked --no-dev|/app/\.venv/bin/skevo" Dockerfile
 if rg -n "requirements\.txt|pip install|PYTHONPATH" Dockerfile; then exit 1; fi
 git diff --check -- Dockerfile
 ```
@@ -334,11 +334,11 @@ docker info
 If it exits 0, run:
 
 ```bash
-docker build -t bear-code:uv-migration .
-docker run --rm bear-code:uv-migration --help
+docker build -t skevo:uv-migration .
+docker run --rm skevo:uv-migration --help
 ```
 
-Expected when Docker is available: the build exits 0 and the container prints `Usage: bear-code` without requiring an API key. If `docker info` fails because no daemon is available, record the Docker build as not executed and continue; do not describe it as passing.
+Expected when Docker is available: the build exits 0 and the container prints `Usage: skevo` without requiring an API key. If `docker info` fails because no daemon is available, record the Docker build as not executed and continue; do not describe it as passing.
 
 - [ ] **Step 6: Commit the container migration**
 
@@ -373,7 +373,7 @@ with:
 
 ```text
 ├── Dockerfile
-├── pyproject.toml               # 项目元数据、依赖和 bear-code 命令入口
+├── pyproject.toml               # 项目元数据、依赖和 skevo 命令入口
 ├── uv.lock                      # 本地与 Docker 共用的锁文件
 └── README.md
 ```
@@ -389,22 +389,22 @@ Replace the existing “安装依赖” block with:
 uv sync
 ```
 
-`uv` 会在项目内创建 `.venv`，并严格按照 `pyproject.toml` 与 `uv.lock` 安装 Bear Code 和运行依赖，无需手动激活虚拟环境。
+`uv` 会在项目内创建 `.venv`，并严格按照 `pyproject.toml` 与 `uv.lock` 安装 Skevo 和运行依赖，无需手动激活虚拟环境。
 ````
 
 - [ ] **Step 3: Use the canonical command in every local example**
 
-Replace each local `python3 -m agents.main` invocation with the equivalent `uv run bear-code` invocation, including one-shot, Plan Mode, resume, `--accept-edits`, and `--yolo` examples. Preserve arguments and environment-variable prefixes. For example:
+Replace each local `python3 -m agents.main` invocation with the equivalent `uv run skevo` invocation, including one-shot, Plan Mode, resume, `--accept-edits`, and `--yolo` examples. Preserve arguments and environment-variable prefixes. For example:
 
 ```bash
-uv run bear-code
-uv run bear-code "总结这个项目的目录结构和核心模块"
-uv run bear-code --plan "分析 Skills 检索逻辑应该如何优化"
-uv run bear-code --resume
-BEAR_AUTO_SKILL_EVOLUTION=1 \
-BEAR_AUTO_SKILL_TARGET=project \
-uv run bear-code --accept-edits
-uv run bear-code --yolo
+uv run skevo
+uv run skevo "总结这个项目的目录结构和核心模块"
+uv run skevo --plan "分析 Skills 检索逻辑应该如何优化"
+uv run skevo --resume
+SKEVO_AUTO_SKILL_EVOLUTION=1 \
+SKEVO_AUTO_SKILL_TARGET=project \
+uv run skevo --accept-edits
+uv run skevo --yolo
 ```
 
 Immediately after the first REPL command, add the compatibility note:
@@ -463,7 +463,7 @@ Keep the existing `docker run` commands unchanged.
 Run:
 
 ```bash
-rg -n "uv sync|uv run bear-code|uv lock --check|uv add|uv remove|uv lock --upgrade" README.md
+rg -n "uv sync|uv run skevo|uv lock --check|uv add|uv remove|uv lock --upgrade" README.md
 rg -n "uv run python -m agents\.main" README.md
 if rg -n "pip install|mini-claude|^python3? -m agents\.main|^├── requirements\.txt" README.md; then exit 1; fi
 git diff --check -- README.md
@@ -514,18 +514,18 @@ Expected: two tests run and both pass.
 Run:
 
 ```bash
-uv run bear-code --help
+uv run skevo --help
 uv run python -m agents.main --help
 ```
 
-Expected: both commands exit 0, identify `bear-code`, and contain no legacy `mini-claude` examples.
+Expected: both commands exit 0, identify `skevo`, and contain no legacy `mini-claude` examples.
 
 - [ ] **Step 4: Verify installed distribution metadata**
 
 Run:
 
 ```bash
-uv run python -c "from importlib.metadata import distribution; entries = {ep.name: ep.value for ep in distribution('bear-code').entry_points}; assert entries.get('bear-code') == 'agents.main:main', entries; print(entries['bear-code'])"
+uv run python -c "from importlib.metadata import distribution; entries = {ep.name: ep.value for ep in distribution('skevo').entry_points}; assert entries.get('skevo') == 'agents.main:main', entries; print(entries['skevo'])"
 ```
 
 Expected: exit 0 and output `agents.main:main`.
@@ -558,7 +558,7 @@ Expected commit subjects, newest first:
 ```text
 docs: document the uv project workflow
 build(docker): install the locked uv project
-feat(cli): add bear-code console entry point
+feat(cli): add skevo console entry point
 build: migrate dependency management to uv
 ```
 

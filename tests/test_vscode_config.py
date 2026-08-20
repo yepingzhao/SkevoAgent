@@ -85,9 +85,9 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
         self.assertEqual(
             [configuration["name"] for configuration in configurations],
             [
-                "Bear Code: Interactive REPL",
-                "Bear Code: One-shot Prompt",
-                "Bear Code: Plan Mode",
+                "Skevo: Interactive REPL",
+                "Skevo: One-shot Prompt",
+                "Skevo: Plan Mode",
                 "Tests: Current File",
                 "Tests: All",
             ],
@@ -108,10 +108,10 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
             self.assertEqual(configuration["envFile"], "${workspaceFolder}/.env")
 
         self.assertNotIn("args", configurations[0])
-        self.assertEqual(configurations[1]["args"], ["${input:bearCodePrompt}"])
+        self.assertEqual(configurations[1]["args"], ["${input:skevoPrompt}"])
         self.assertEqual(
             configurations[2]["args"],
-            ["--plan", "${input:bearCodePlanPrompt}"],
+            ["--plan", "${input:skevoPlanPrompt}"],
         )
 
         self.assertEqual(configurations[3]["module"], "unittest")
@@ -132,13 +132,13 @@ class VSCodeWorkspaceConfigTests(unittest.TestCase):
             launch["inputs"],
             [
                 {
-                    "id": "bearCodePrompt",
+                    "id": "skevoPrompt",
                     "type": "promptString",
                     "description": "Prompt to run once",
                     "default": "Summarize this project",
                 },
                 {
-                    "id": "bearCodePlanPrompt",
+                    "id": "skevoPlanPrompt",
                     "type": "promptString",
                     "description": "Prompt to analyze in Plan Mode",
                     "default": "Analyze how to improve this project",

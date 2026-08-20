@@ -253,9 +253,9 @@ Add these methods to `VSCodeWorkspaceConfigTests` in `tests/test_vscode_config.p
         self.assertEqual(
             [configuration["name"] for configuration in configurations],
             [
-                "Bear Code: Interactive REPL",
-                "Bear Code: One-shot Prompt",
-                "Bear Code: Plan Mode",
+                "Skevo: Interactive REPL",
+                "Skevo: One-shot Prompt",
+                "Skevo: Plan Mode",
                 "Tests: Current File",
                 "Tests: All",
             ],
@@ -275,10 +275,10 @@ Add these methods to `VSCodeWorkspaceConfigTests` in `tests/test_vscode_config.p
             self.assertEqual(configuration["envFile"], "${workspaceFolder}/.env")
 
         self.assertNotIn("args", configurations[0])
-        self.assertEqual(configurations[1]["args"], ["${input:bearCodePrompt}"])
+        self.assertEqual(configurations[1]["args"], ["${input:skevoPrompt}"])
         self.assertEqual(
             configurations[2]["args"],
-            ["--plan", "${input:bearCodePlanPrompt}"],
+            ["--plan", "${input:skevoPlanPrompt}"],
         )
 
         self.assertEqual(configurations[3]["module"], "unittest")
@@ -299,13 +299,13 @@ Add these methods to `VSCodeWorkspaceConfigTests` in `tests/test_vscode_config.p
             launch["inputs"],
             [
                 {
-                    "id": "bearCodePrompt",
+                    "id": "skevoPrompt",
                     "type": "promptString",
                     "description": "Prompt to run once",
                     "default": "Summarize this project",
                 },
                 {
-                    "id": "bearCodePlanPrompt",
+                    "id": "skevoPlanPrompt",
                     "type": "promptString",
                     "description": "Prompt to analyze in Plan Mode",
                     "default": "Analyze how to improve this project",
@@ -333,7 +333,7 @@ Create `.vscode/launch.json` with:
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Bear Code: Interactive REPL",
+      "name": "Skevo: Interactive REPL",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
@@ -343,12 +343,12 @@ Create `.vscode/launch.json` with:
       "justMyCode": true
     },
     {
-      "name": "Bear Code: One-shot Prompt",
+      "name": "Skevo: One-shot Prompt",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
       "args": [
-        "${input:bearCodePrompt}"
+        "${input:skevoPrompt}"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
@@ -356,13 +356,13 @@ Create `.vscode/launch.json` with:
       "justMyCode": true
     },
     {
-      "name": "Bear Code: Plan Mode",
+      "name": "Skevo: Plan Mode",
       "type": "debugpy",
       "request": "launch",
       "module": "agents.main",
       "args": [
         "--plan",
-        "${input:bearCodePlanPrompt}"
+        "${input:skevoPlanPrompt}"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
@@ -402,13 +402,13 @@ Create `.vscode/launch.json` with:
   ],
   "inputs": [
     {
-      "id": "bearCodePrompt",
+      "id": "skevoPrompt",
       "type": "promptString",
       "description": "Prompt to run once",
       "default": "Summarize this project"
     },
     {
-      "id": "bearCodePlanPrompt",
+      "id": "skevoPlanPrompt",
       "type": "promptString",
       "description": "Prompt to analyze in Plan Mode",
       "default": "Analyze how to improve this project"
@@ -435,7 +435,7 @@ Run:
 .venv/bin/python -m agents.main --help
 ```
 
-Expected: exit 0 and output beginning with `Usage: bear-code [options] [prompt]` without requiring API credentials.
+Expected: exit 0 and output beginning with `Usage: skevo [options] [prompt]` without requiring API credentials.
 
 Run:
 
@@ -456,7 +456,7 @@ Expected: PASS with all seven CLI and configuration tests.
 Run:
 
 ```bash
-.venv/bin/python -c "import sys; from agents.main import parse_args; sys.argv = ['bear-code', '--plan', 'debug prompt']; args = parse_args(); assert args.plan is True and args.prompt == ['debug prompt']"
+.venv/bin/python -c "import sys; from agents.main import parse_args; sys.argv = ['skevo', '--plan', 'debug prompt']; args = parse_args(); assert args.plan is True and args.prompt == ['debug prompt']"
 ```
 
 Expected: exit 0, confirming the Plan Mode argument order used by `launch.json` reaches the existing parser without making a model request.

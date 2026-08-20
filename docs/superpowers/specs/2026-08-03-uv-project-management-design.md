@@ -2,16 +2,16 @@
 
 ## Context
 
-BearCode is a Python 3.11+ command-line application. Its five direct runtime dependencies currently live in `requirements.txt`, local setup uses `venv` plus `pip`, Docker installs the same requirements with `pip`, and the application is started with `python -m agents.main`. The CLI help is also inconsistent: its usage block says `bear-code`, while `argparse` and examples still use `mini-claude`.
+Skevo is a Python 3.11+ command-line application. Its five direct runtime dependencies currently live in `requirements.txt`, local setup uses `venv` plus `pip`, Docker installs the same requirements with `pip`, and the application is started with `python -m agents.main`. The CLI help is also inconsistent: its usage block says `skevo`, while `argparse` and examples still use `mini-claude`.
 
-This migration will make `uv` the single project and dependency manager for local development and Docker. It will also package the existing `agents` directory in place and expose a formal `bear-code` console command.
+This migration will make `uv` the single project and dependency manager for local development and Docker. It will also package the existing `agents` directory in place and expose a formal `skevo` console command.
 
 ## Goals
 
 - Make `pyproject.toml` the only direct dependency declaration.
 - Commit `uv.lock` so local and container environments resolve to the same versions.
 - Package the existing `agents` directory without moving or renaming its modules.
-- Expose `bear-code` as the canonical command-line entry point.
+- Expose `skevo` as the canonical command-line entry point.
 - Keep `python -m agents.main` as a supported compatibility entry point under `uv run`.
 - Use `uv` rather than `pip` to install locked dependencies in Docker.
 - Update README setup and execution instructions to describe only the supported `uv` workflow.
@@ -30,7 +30,7 @@ This migration will make `uv` the single project and dependency manager for loca
 
 Add `agents/__init__.py` so `agents` is an explicit Python package. Add a PEP 621 `pyproject.toml` with:
 
-- project name `bear-code`;
+- project name `skevo`;
 - an initial project version of `0.1.0`;
 - `README.md` as the project readme;
 - `requires-python = ">=3.11"`;
@@ -40,7 +40,7 @@ Add `agents/__init__.py` so `agents` is an explicit Python package. Add a PEP 62
   - `python-dotenv>=1.0.0`;
   - `rich>=13.0.0`;
   - `tqdm>=4.66.0`;
-- a `bear-code = "agents.main:main"` console script;
+- a `skevo = "agents.main:main"` console script;
 - Hatchling as the build backend;
 - an explicit Hatch wheel package list containing `agents`.
 
@@ -52,7 +52,7 @@ The primary local workflow becomes:
 
 ```bash
 uv sync
-uv run bear-code
+uv run skevo
 ```
 
 The supported module form remains:
@@ -63,7 +63,7 @@ uv run python -m agents.main
 
 ## CLI Naming
 
-The canonical executable name is `bear-code`. Update `argparse.ArgumentParser(prog=...)`, the custom help examples in `agents/main.py`, and README command examples so they no longer refer to `mini-claude`.
+The canonical executable name is `skevo`. Update `argparse.ArgumentParser(prog=...)`, the custom help examples in `agents/main.py`, and README command examples so they no longer refer to `mini-claude`.
 
 Both the console script and module invocation call the existing `agents.main:main` function. No wrapper with a second execution path will be introduced.
 
@@ -77,9 +77,9 @@ The dependency layer will:
 2. copy `pyproject.toml`, `uv.lock`, and the readme metadata required by the build backend;
 3. run `uv sync --locked --no-dev --no-install-project` to install only locked third-party dependencies and maximize Docker layer reuse;
 4. copy `agents/`;
-5. run `uv sync --locked --no-dev` to install the application and register `bear-code`.
+5. run `uv sync --locked --no-dev` to install the application and register `skevo`.
 
-Set the container entry point directly to `/app/.venv/bin/bear-code`. The existing runtime working directory remains `/workspace`, and the existing system, Node.js, Playwright, volume, and MCP behavior stays unchanged.
+Set the container entry point directly to `/app/.venv/bin/skevo`. The existing runtime working directory remains `/workspace`, and the existing system, Node.js, Playwright, volume, and MCP behavior stays unchanged.
 
 The Docker build must fail if `pyproject.toml` and `uv.lock` disagree. It must not silently re-lock or fall back to `pip`.
 
@@ -89,7 +89,7 @@ Update README sections that describe the directory tree, environment preparation
 
 - replace `requirements.txt` with `pyproject.toml` and `uv.lock` in the tree;
 - replace manual `venv` and `pip install` steps with `uv sync`;
-- use `uv run bear-code` for all normal CLI examples;
+- use `uv run skevo` for all normal CLI examples;
 - document `uv run python -m agents.main` only as a compatibility form;
 - document `uv lock --check` and `uv sync --locked` for reproducibility;
 - explain that dependency updates use `uv add`, `uv remove`, and `uv lock --upgrade` rather than editing a requirements file;
@@ -100,7 +100,7 @@ Update README sections that describe the directory tree, environment preparation
 Add `tests/test_cli.py` using `unittest`; do not add pytest or another test dependency. The test invokes the help path without an API key and asserts:
 
 - help exits successfully;
-- the output identifies `bear-code`;
+- the output identifies `skevo`;
 - the output no longer contains `mini-claude`.
 
 The implementation is complete only when these commands pass:
@@ -109,11 +109,11 @@ The implementation is complete only when these commands pass:
 uv lock --check
 uv sync --locked
 uv run python -m unittest discover -s tests -v
-uv run bear-code --help
+uv run skevo --help
 uv run python -m agents.main --help
 ```
 
-Also inspect the installed distribution metadata to confirm the `bear-code` console entry maps to `agents.main:main`, confirm `requirements.txt` is absent, and confirm `uv.lock` is tracked.
+Also inspect the installed distribution metadata to confirm the `skevo` console entry maps to `agents.main:main`, confirm `requirements.txt` is absent, and confirm `uv.lock` is tracked.
 
 If a Docker daemon is available, build the image to validate the complete locked installation and entry point. If no daemon is available, report that the Docker build was not executed; static inspection is not equivalent to a successful image build.
 
@@ -126,10 +126,10 @@ If a Docker daemon is available, build the image to validate the complete locked
 
 ## Acceptance Criteria
 
-1. A developer with `uv` and Python 3.11+ can clone the repository, run `uv sync`, and invoke `uv run bear-code --help` successfully.
-2. `uv run bear-code` and `uv run python -m agents.main` execute the same `main()` implementation.
+1. A developer with `uv` and Python 3.11+ can clone the repository, run `uv sync`, and invoke `uv run skevo --help` successfully.
+2. `uv run skevo` and `uv run python -m agents.main` execute the same `main()` implementation.
 3. `pyproject.toml` and committed `uv.lock` are the only project dependency sources; `requirements.txt` is removed.
 4. Local development and Docker install from the same lock file.
-5. All user-facing CLI examples use `bear-code`, not `mini-claude`.
+5. All user-facing CLI examples use `skevo`, not `mini-claude`.
 6. The CLI regression test passes without API credentials or network access.
 7. No pre-existing working-tree deletion or untracked `.DS_Store` is included in the migration commits.

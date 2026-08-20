@@ -1,1 +1,1 @@
-"""BearCode agent runtime package."""
+"""Skevo agent runtime package."""

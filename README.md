@@ -1,8 +1,8 @@
-# Bear Agent
+# Skevo Agent
 
-Bear Agent 是一个基于 Python 实现的 **自进化 Harness Agent**。它不是简单的命令行聊天工具，而是一个可运行、可阅读、可扩展的本地 Coding Agent Runtime：统一编排大模型推理、工具调用、文件编辑、Shell 执行、权限控制、长期记忆、Skills、自进化、MCP 外部工具、子 Agent 和会话恢复。
+Skevo Agent 是一个基于 Python 实现的 **自进化 Harness Agent**。它不是简单的命令行聊天工具，而是一个可运行、可阅读、可扩展的本地 Coding Agent Runtime：统一编排大模型推理、工具调用、文件编辑、Shell 执行、权限控制、长期记忆、Skills、自进化、MCP 外部工具、子 Agent 和会话恢复。
 
-项目重点是 **Harness**：模型只负责推理和提出工具调用意图，真正的环境操作由 Bear Code Runtime 统一做权限判断、工具执行、结果回写、上下文压缩和经验沉淀。它适合学习 Claude Code 类工具的底层机制，也适合作为个人 Coding Agent、项目分析助手或领域 Agent 的二次开发基础。
+项目重点是 **Harness**：模型只负责推理和提出工具调用意图，真正的环境操作由 Skevo Runtime 统一做权限判断、工具执行、结果回写、上下文压缩和经验沉淀。它适合学习 Claude Code 类工具的底层机制，也适合作为个人 Coding Agent、项目分析助手或领域 Agent 的二次开发基础。
 
 ## 核心亮点
 
@@ -18,7 +18,7 @@ Bear Agent 是一个基于 Python 实现的 **自进化 Harness Agent**。它不
 
 ## 项目架构
 
-![Bear Agent 总体架构](wiki/assets/architecture/01-overall-architecture.svg)
+![Skevo Agent 总体架构](wiki/assets/architecture/01-overall-architecture.svg)
 
 核心运行链路：
 
@@ -39,7 +39,7 @@ Bear Agent 是一个基于 Python 实现的 **自进化 Harness Agent**。它不
 ## 目录结构
 
 ```text
-BearAgent/
+SkevoAgent/
 ├── agents/
 │   ├── main.py                    # CLI 入口、REPL、参数解析
 │   ├── agent.py                   # Agent Runtime、模型调用、工具调度、上下文压缩
@@ -53,12 +53,12 @@ BearAgent/
 │   ├── subagent.py                # 子 Agent 配置
 │   ├── session.py                 # 会话保存与恢复
 │   └── ui.py                      # 终端 UI 输出
-├── .bear/
+├── .skevo/
 │   ├── skills/                    # 项目级 Skills
 │   └── skill-evolution/           # Skills 自进化审计产物
 ├── wiki/                          # 项目文档中心
 ├── Dockerfile
-├── pyproject.toml               # 项目元数据、依赖和 bear-code 命令入口
+├── pyproject.toml               # 项目元数据、依赖和 skevo 命令入口
 ├── uv.lock                      # 本地与 Docker 共用的锁文件
 └── README.md
 ```
@@ -81,7 +81,7 @@ BearAgent/
 uv sync
 ```
 
-`uv` 会在项目内创建 `.venv`，并根据 `pyproject.toml` 与 `uv.lock` 同步 Bear Code 和运行依赖，无需手动激活虚拟环境。如果项目元数据发生变化，普通的 `uv sync` 会更新 `uv.lock`；需要验证锁文件不发生变化时，请使用 `uv sync --locked`。
+`uv` 会在项目内创建 `.venv`，并根据 `pyproject.toml` 与 `uv.lock` 同步 Skevo 和运行依赖，无需手动激活虚拟环境。如果项目元数据发生变化，普通的 `uv sync` 会更新 `uv.lock`；需要验证锁文件不发生变化时，请使用 `uv sync --locked`。
 
 ### 2. 配置 `.env`
 
@@ -120,7 +120,7 @@ MODEL=deepseek-chat
 ### 3. 启动 REPL
 
 ```bash
-uv run bear-code
+uv run skevo
 ```
 
 如需直接使用模块入口，仍可运行：
@@ -138,7 +138,7 @@ uv run python -m agents.main
 ### 4. 执行一次性任务
 
 ```bash
-uv run bear-code "总结这个项目的目录结构和核心模块"
+uv run skevo "总结这个项目的目录结构和核心模块"
 ```
 
 ### 5. 使用 Plan Mode
@@ -146,7 +146,7 @@ uv run bear-code "总结这个项目的目录结构和核心模块"
 Plan Mode 适合重构、复杂修复和多文件修改。它会先只读分析和写计划，用户审批后再执行。
 
 ```bash
-uv run bear-code --plan "分析 Skills 检索逻辑应该如何优化"
+uv run skevo --plan "分析 Skills 检索逻辑应该如何优化"
 ```
 
 REPL 中也可以输入：
@@ -158,7 +158,7 @@ REPL 中也可以输入：
 ### 6. 恢复最近会话
 
 ```bash
-uv run bear-code --resume
+uv run skevo --resume
 ```
 
 ## 依赖管理
@@ -188,33 +188,33 @@ uv sync
 
 ## 如何让项目自动沉淀并进化 Skills
 
-Bear Code 的核心特色是 **自进化 Skills**。它可以从用户明确反馈中抽取未来可复用的规则，并自动新增或合并到项目级或用户级 `SKILL.md`。
+Skevo 的核心特色是 **自进化 Skills**。它可以从用户明确反馈中抽取未来可复用的规则，并自动新增或合并到项目级或用户级 `SKILL.md`。
 
 ### 1. 开启自动自进化
 
-默认 `BEAR_AUTO_SKILL_EVOLUTION` 是开启的。为了明确配置，建议在 `.env` 中写：
+默认 `SKEVO_AUTO_SKILL_EVOLUTION` 是开启的。为了明确配置，建议在 `.env` 中写：
 
 ```env
-BEAR_AUTO_SKILL_EVOLUTION=1
-BEAR_AUTO_SKILL_TARGET=project
+SKEVO_AUTO_SKILL_EVOLUTION=1
+SKEVO_AUTO_SKILL_TARGET=project
 ```
 
 含义：
 
-- `BEAR_AUTO_SKILL_EVOLUTION=1`：启用在线 Skill 自进化。
-- `BEAR_AUTO_SKILL_TARGET=project`：自动新增的 Skill 写入当前项目 `.bear/skills/`。
+- `SKEVO_AUTO_SKILL_EVOLUTION=1`：启用在线 Skill 自进化。
+- `SKEVO_AUTO_SKILL_TARGET=project`：自动新增的 Skill 写入当前项目 `.skevo/skills/`。
 
 如果希望沉淀为所有项目共享的个人 Skill：
 
 ```env
-BEAR_AUTO_SKILL_TARGET=user
+SKEVO_AUTO_SKILL_TARGET=user
 ```
 
 对应路径：
 
 ```text
-project: <project>/.bear/skills/<skill_name>/SKILL.md
-user:    ~/.bear/skills/<skill_name>/SKILL.md
+project: <project>/.skevo/skills/<skill_name>/SKILL.md
+user:    ~/.skevo/skills/<skill_name>/SKILL.md
 ```
 
 ### 2. 用允许写入的权限模式启动
@@ -222,15 +222,15 @@ user:    ~/.bear/skills/<skill_name>/SKILL.md
 后台自动写入 Skill 需要当前权限模式允许写文件。推荐使用：
 
 ```bash
-BEAR_AUTO_SKILL_EVOLUTION=1 \
-BEAR_AUTO_SKILL_TARGET=project \
-uv run bear-code --accept-edits
+SKEVO_AUTO_SKILL_EVOLUTION=1 \
+SKEVO_AUTO_SKILL_TARGET=project \
+uv run skevo --accept-edits
 ```
 
 也可以使用更激进的模式：
 
 ```bash
-uv run bear-code --yolo
+uv run skevo --yolo
 ```
 
 不建议长期默认使用 `--yolo`，因为它会跳过确认。日常推荐 `--accept-edits`，既能让后台 Skill 写入正常发生，又不会绕过所有权限判断。
@@ -285,12 +285,12 @@ agents/skill_evolution.py
 审计产物：
 
 ```text
-.bear/skill-evolution/usage.jsonl
-.bear/skill-evolution/online_provenance.jsonl
-.bear/skill-evolution/online_skill_provenance.json
-.bear/skill-evolution/skill_usage_stats.json
-.bear/skill-evolution/history/
-.bear/skill-evolution/pruned/
+.skevo/skill-evolution/usage.jsonl
+.skevo/skill-evolution/online_provenance.jsonl
+.skevo/skill-evolution/online_skill_provenance.json
+.skevo/skill-evolution/skill_usage_stats.json
+.skevo/skill-evolution/history/
+.skevo/skill-evolution/pruned/
 ```
 
 ### 5. 手动触发当前窗口抽取
@@ -361,8 +361,8 @@ Skill 是一个可复用能力说明文件，通常是一个带 frontmatter 的 
 Skill 路径：
 
 ```text
-用户级：~/.bear/skills/<skill_name>/SKILL.md
-项目级：<project>/.bear/skills/<skill_name>/SKILL.md
+用户级：~/.skevo/skills/<skill_name>/SKILL.md
+项目级：<project>/.skevo/skills/<skill_name>/SKILL.md
 ```
 
 示例：
@@ -393,13 +393,13 @@ Skill 和 Memory 的区别：
 
 ## MCP 支持
 
-Bear Code 支持 MCP 外部工具扩展。MCP Server 可以通过 stdio JSON-RPC 暴露工具，Bear Code 会将其包装为 Agent 可调用工具。
+Skevo 支持 MCP 外部工具扩展。MCP Server 可以通过 stdio JSON-RPC 暴露工具，Skevo 会将其包装为 Agent 可调用工具。
 
 配置来源：
 
 ```text
-~/.bear/settings.json
-<project>/.bear/settings.json
+~/.skevo/settings.json
+<project>/.skevo/settings.json
 <project>/.mcp.json
 ```
 
@@ -428,7 +428,7 @@ mcp__<serverName>__<toolName>
 构建镜像：
 
 ```bash
-docker build -t bear-code .
+docker build -t skevo .
 ```
 
 镜像构建使用项目提交的 `uv.lock` 执行 `uv sync --locked --no-dev`；如果锁文件与 `pyproject.toml` 不一致，构建会直接失败。
@@ -439,9 +439,9 @@ docker build -t bear-code .
 docker run --rm -it \
   --env-file .env \
   -v "$PWD:/workspace" \
-  -v bear-code-sessions:/root/.bear-code \
-  -v bear-code-memory:/root/.BearCode \
-  bear-code
+  -v skevo-sessions:/root/.skevo \
+  -v skevo-memory:/root/.skevo \
+  skevo
 ```
 
 允许自动沉淀 Skills：
@@ -449,25 +449,25 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   --env-file .env \
-  -e BEAR_AUTO_SKILL_EVOLUTION=1 \
-  -e BEAR_AUTO_SKILL_TARGET=project \
+  -e SKEVO_AUTO_SKILL_EVOLUTION=1 \
+  -e SKEVO_AUTO_SKILL_TARGET=project \
   -v "$PWD:/workspace" \
-  -v bear-code-sessions:/root/.bear-code \
-  -v bear-code-memory:/root/.BearCode \
-  bear-code --accept-edits
+  -v skevo-sessions:/root/.skevo \
+  -v skevo-memory:/root/.skevo \
+  skevo --accept-edits
 ```
 
 ## 重要数据路径
 
 | 数据 | 路径 |
 |------|------|
-| 项目级 Skills | `.bear/skills/<skill_name>/SKILL.md` |
-| 用户级 Skills | `~/.bear/skills/<skill_name>/SKILL.md` |
-| Skills 自进化审计 | `.bear/skill-evolution/` |
-| 长期记忆 | `~/.BearCode/projects/<project_hash>/memory/` |
-| 会话历史 | `~/.bear-code/sessions/` |
-| 大工具结果 | `~/.bear-code/tool-results/` |
-| Plan Mode 计划 | `~/.bear/plans/` |
+| 项目级 Skills | `.skevo/skills/<skill_name>/SKILL.md` |
+| 用户级 Skills | `~/.skevo/skills/<skill_name>/SKILL.md` |
+| Skills 自进化审计 | `.skevo/skill-evolution/` |
+| 长期记忆 | `~/.Skevo/projects/<project_hash>/memory/` |
+| 会话历史 | `~/.skevo/sessions/` |
+| 大工具结果 | `~/.skevo/tool-results/` |
+| Plan Mode 计划 | `~/.skevo/plans/` |
 
 ## 文档入口
 
@@ -484,7 +484,7 @@ docker run --rm -it \
 
 ## 适合如何使用
 
-Bear Code 适合：
+Skevo 适合：
 
 - 学习 Claude Code 类工具的 Agent Loop 和工具调用机制。
 - 学习如何做本地文件编辑型 Agent 的权限控制。
@@ -492,4 +492,4 @@ Bear Code 适合：
 - 扩展成个人 Coding Agent。
 - 扩展成带长期记忆和可复用经验沉淀的领域 Agent。
 
-如果只看一个核心点：Bear Code 是一个会把稳定用户反馈沉淀成 Skills 的 **自进化 Harness Agent**。
+如果只看一个核心点：Skevo 是一个会把稳定用户反馈沉淀成 Skills 的 **自进化 Harness Agent**。

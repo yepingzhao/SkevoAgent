@@ -31,7 +31,7 @@ Before setup, verify `.worktrees/` is ignored. If the isolated worktree has no `
 ```bash
 env -u UV_INDEX -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL \
   UV_DEFAULT_INDEX=https://pypi.org/simple/ \
-  UV_CACHE_DIR=/tmp/bearcode-thinking-answer-cache \
+  UV_CACHE_DIR=/tmp/skevo-thinking-answer-cache \
   UV_LINK_MODE=copy \
   uv sync --locked --no-progress
 ```

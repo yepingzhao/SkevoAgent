@@ -60,7 +60,7 @@ def _print_structured(renderable: object) -> None:
     console.print(renderable)
 
 
-COOKIE_BEAR = r"""
+COOKIE_SKEVO = r"""
         _     _
       _( )___( )_
      /  o     o  \
@@ -72,9 +72,9 @@ COOKIE_BEAR = r"""
 
 
 def print_welcome() -> None:
-    title = Text("Bear Code", style="bold #f6c177")
+    title = Text("Skevo", style="bold #f6c177")
     subtitle = Text("Evolvable Coding Agent CLI", style="bold cyan")
-    cookie = Text(COOKIE_BEAR, style="bold #d19a66")
+    cookie = Text(COOKIE_SKEVO, style="bold #d19a66")
 
     commands = Table.grid(padding=(0, 2))
     commands.add_column(style="bold cyan", no_wrap=True)
@@ -97,7 +97,7 @@ def print_welcome() -> None:
     console.print()
     console.print(Panel(
         body,
-        title="[bold #f6c177] bear cookie ready [/bold #f6c177]",
+        title="[bold #f6c177] skevo cookie ready [/bold #f6c177]",
         subtitle="[dim]Type your request below[/dim]",
         border_style="#d19a66",
         box=box.ROUNDED,
@@ -107,7 +107,7 @@ def print_welcome() -> None:
 
 
 def print_user_prompt() -> None:
-    console.print("\n[bold #f6c177]Bear[/bold #f6c177][bold cyan]Code[/bold cyan] [dim]❯[/dim] ", end="")
+    console.print("\n[bold #f6c177]Skevo[/bold #f6c177] [dim]❯[/dim] ", end="")
 
 
 def print_assistant_text(text: str) -> None:
@@ -250,7 +250,7 @@ def print_warning(msg: str) -> None:
 
 def print_goodbye() -> None:
     _print_structured(Panel(
-        Text("Bye. Bear cookie saved for next time.", style="bold #f6c177"),
+        Text("Bye. Skevo cookie saved for next time.", style="bold #f6c177"),
         border_style="#d19a66",
         box=box.ROUNDED,
         padding=(0, 1),
