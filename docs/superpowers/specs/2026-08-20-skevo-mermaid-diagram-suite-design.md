@@ -216,7 +216,7 @@ Mermaid 使用约束：
 8. `dontAsk` 对需要确认的操作自动拒绝。
 9. 其余操作允许。
 
-Plan Mode 状态：进入时保存原模式并生成 plan 文件；运行时由 system prompt 声明只读意图，并由 `check_permission` 执行部分约束；退出时由用户选择继续规划、执行或手工执行。
+Plan Mode 状态：`--plan` 初始化或显式进入时生成唯一 plan 文件路径并注入 system prompt；通过 `/plan` 或 `enter_plan_mode` 显式进入时还会保存原模式。plan 文件本身要到工具写入时才会创建。运行时由 system prompt 声明只读意图，并由 `check_permission` 执行部分约束。再次执行 `/plan` 会直接恢复原模式；`exit_plan_mode` 在无审批回调时也会恢复原模式。交互式审批原本提供继续规划、执行、清空上下文后执行和手工执行四种选择，但当前实现会先触发下述异步回调缺陷，因而这些选择分支实际不可达。
 
 当前实现风险必须显式注记：
 
@@ -224,6 +224,7 @@ Plan Mode 状态：进入时保存原模式并生成 plan 文件；运行时由 
 - `exit_plan_mode` 当前把 plan 文件路径赋给 `plan_content`，没有读取文件正文。
 - 交互审批分支没有明确把 `target_mode` 赋给 `permission_mode`。
 - `READ_TOOLS` 包含 `compact_context`；此外，当前权限函数只在 Plan Mode 中显式拒绝 `EDIT_TOOLS` 和 `run_shell`，其他未命中分支的工具仍会落到默认允许，因此实际 enforcement 比 Plan Mode prompt 宣称的“只读”范围更宽。
+- `toggle_plan_mode` 通过 `/plan` 进入时会更新 `self._system_prompt`，但 OpenAI 路径没有同步已有消息历史中的 system message；通过 `enter_plan_mode` 工具进入时则会同步。
 
 上述风险不得画成已验证成功路径，也不在本任务中修复。
 

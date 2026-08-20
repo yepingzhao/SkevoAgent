@@ -373,6 +373,8 @@ git commit -m "docs: add tool loading and dispatch diagram"
 
 - [ ] **Step 1: Write the complete flowchart**
 
+> 实现核对（以此说明和最终 MMD 为准，下面代码块仅保留最初的布局草稿）：`--plan` 和显式进入只生成唯一 plan 路径，文件要到工具写入时才创建；`/plan` 可直接退出，`exit_plan_mode` 无审批回调时恢复原模式；REPL 的异步审批回调当前未被 `await`，四个审批选择分支实际不可达。图中还必须标出 plan 正文未读取、审批分支未更新 `permission_mode`、Plan Mode enforcement 范围偏宽，以及 `/plan` 进入时未同步 OpenAI system message。主权限流必须保持 `check_permission` 的真实短路顺序。
+
 ```mermaid
 ---
 title: 权限决策与 Plan Mode 状态转换
@@ -463,7 +465,7 @@ flowchart TD
 mmdc -i docs/diagrams/mmd/04-permissions-and-plan-mode.mmd -o /tmp/04-permissions-and-plan-mode.svg -b white
 ```
 
-Expected: exit code 0; every decision branch has a label; the warning note is visually separate from successful paths.
+Expected: exit code 0；每个决策分支都有标签；权限主路径与 Plan Mode 状态区清楚分开；当前失败点和风险注记不被画成成功路径；无裁切、重叠或边穿节点。
 
 - [ ] **Step 3: Commit**
 

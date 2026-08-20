@@ -1,0 +1,129 @@
+---
+title: 权限决策与 Plan Mode 状态转换
+config:
+  theme: base
+  look: classic
+  flowchart:
+    curve: basis
+---
+%% Purpose: 严格展示 check_permission 的短路判断顺序，以及 Plan Mode 的实际状态转换与已知风险。
+%% Audience: maintainer
+%% Sources: agents/main.py, agents/tools.py, agents/agent.py
+%% Anchors: _resolve_permission_mode, check_permission, Agent.toggle_plan_mode, Agent._execute_plan_mode_tool, run_repl.plan_approval_fn
+%% Out of scope: 工具 schema 加载、工具内部实现、权限规则文件格式细节。
+
+flowchart TB
+    accTitle: 权限决策与 Plan Mode 状态转换
+    accDescr: 权限区按源码短路顺序展示 bypass、规则、只读工具、Plan Mode、计划工具、acceptEdits 与确认策略；状态区区分命令行初始化、REPL toggle 和模型工具产生的 Plan Mode 转换，并标注当前实现缺陷
+
+    subgraph PERMISSION["A · check_permission：从上到下短路返回"]
+        direction TB
+        CALL(["收到 tool call"])
+        BYPASS{"mode = bypassPermissions?"}
+        RULE_DENY{"命中 deny rule?"}
+        RULE_ALLOW{"命中 allow rule?"}
+        READ{"属于 READ_TOOLS?"}
+        PLAN{"mode = plan?"}
+        PLAN_EDIT{"属于 EDIT_TOOLS?"}
+        PLAN_PATH{"file_path / path<br/>等于唯一 plan 路径?"}
+        PLAN_SHELL{"工具是 run_shell?"}
+        PLAN_TOOL{"enter_plan_mode<br/>或 exit_plan_mode?"}
+        ACCEPT{"mode = acceptEdits<br/>且属于 EDIT_TOOLS?"}
+        CONFIRM{"危险 Shell / 新文件 write_file /<br/>不存在文件 edit_file /<br/>skill_create / skill_evolve?"}
+        DONTASK{"mode = dontAsk?"}
+        ALLOW_BYPASS(["返回 allow<br/>bypass 优先"])
+        DENY_RULE(["返回 deny<br/>规则拒绝"])
+        ALLOW_RULE(["返回 allow<br/>规则允许"])
+        ALLOW_READ(["返回 allow<br/>READ_TOOLS"])
+        ALLOW_PLAN_FILE(["返回 allow<br/>唯一 plan 路径"])
+        DENY_PLAN_EDIT(["返回 deny<br/>plan 禁止该编辑"])
+        DENY_PLAN_SHELL(["返回 deny<br/>plan 禁止 Shell"])
+        ALLOW_PLAN_TOOL(["返回 allow<br/>计划模式工具"])
+        ALLOW_EDIT(["返回 allow<br/>acceptEdits"])
+        ALLOW_DEFAULT(["返回 allow<br/>默认放行"])
+        DENY_DONTASK(["返回 deny<br/>dontAsk 自动拒绝"])
+        ASK(["返回 confirm + 摘要"])
+
+        CALL --> BYPASS
+        BYPASS -->|是| ALLOW_BYPASS
+        BYPASS -->|否| RULE_DENY
+        RULE_DENY -->|是| DENY_RULE
+        RULE_DENY -->|否| RULE_ALLOW
+        RULE_ALLOW -->|是| ALLOW_RULE
+        RULE_ALLOW -->|否| READ
+        READ -->|是| ALLOW_READ
+        READ -->|否| PLAN
+        PLAN -->|否| PLAN_TOOL
+        PLAN -->|是| PLAN_EDIT
+        PLAN_EDIT -->|是| PLAN_PATH
+        PLAN_PATH -->|是| ALLOW_PLAN_FILE
+        PLAN_PATH -->|否| DENY_PLAN_EDIT
+        PLAN_EDIT -->|否| PLAN_SHELL
+        PLAN_SHELL -->|是| DENY_PLAN_SHELL
+        PLAN_SHELL -->|否| PLAN_TOOL
+        PLAN_TOOL -->|是| ALLOW_PLAN_TOOL
+        PLAN_TOOL -->|否| ACCEPT
+        ACCEPT -->|是| ALLOW_EDIT
+        ACCEPT -->|否| CONFIRM
+        CONFIRM -->|否| ALLOW_DEFAULT
+        CONFIRM -->|是| DONTASK
+        DONTASK -->|是：自动拒绝| DENY_DONTASK
+        DONTASK -->|否| ASK
+    end
+
+    subgraph PLAN_STATE["B · Plan Mode：当前状态转换"]
+        direction TB
+        MODE_RESOLVE["CLI 初始模式优先级<br/>--yolo → --plan → --accept-edits<br/>→ --dont-ask → default"]
+        NORMAL["初始为非 plan mode"]
+        INIT["--plan 初始化<br/>mode = plan<br/>生成唯一 plan 路径并注入 prompt"]
+        ENTER["/plan 或 enter_plan_mode<br/>保存原 mode、切换 plan<br/>生成唯一 plan 路径并注入 prompt"]
+        ACTIVE["Plan Mode active<br/>prompt 声明只读意图<br/>check_permission 部分强制"]
+        TOGGLE_EXIT["再次 /plan<br/>直接恢复原 mode<br/>清除路径与 Plan prompt"]
+        EXIT_TOOL{"调用 exit_plan_mode<br/>存在审批回调?"}
+        FALLBACK["无回调：恢复原 mode<br/>清除路径与 Plan prompt"]
+        RESTORED(["非 plan mode<br/>退出完成"])
+        ASYNC_BUG["当前失败点<br/>异步审批回调未 await<br/>随后对 coroutine 调用 .get"]
+        EXPECTED["设计中的审批选择（当前不可达）<br/>继续规划 / 执行 / 清上下文后执行 / 手工执行"]
+
+        MODE_RESOLVE -->|结果非 plan| NORMAL
+        MODE_RESOLVE -->|结果为 plan| INIT --> ACTIVE
+        NORMAL -->|显式进入| ENTER --> ACTIVE
+        ACTIVE -->|REPL toggle| TOGGLE_EXIT --> RESTORED
+        ACTIVE -->|模型工具退出| EXIT_TOOL
+        EXIT_TOOL -->|否| FALLBACK --> RESTORED
+        EXIT_TOOL -->|是| ASYNC_BUG
+        ASYNC_BUG -.->|若修复 await 后才会进入| EXPECTED
+    end
+
+    RUNTIME_CONFIRM["调用端处理 confirm<br/>已确认摘要可复用；否则询问用户"]
+    EXECUTE(["调用端获准执行"])
+    REJECT(["调用端拒绝并回写 tool result"])
+    ENFORCEMENT_RISK["当前 enforcement 边界<br/>READ_TOOLS 含 compact_context；plan 仅显式拒绝<br/>EDIT_TOOLS 与 run_shell，其他未命中工具默认允许"]
+    CONTENT_RISK["exit_plan_mode 数据缺陷<br/>plan_content 被赋为文件路径，未读取正文；<br/>审批分支也未把 target_mode 赋给 permission_mode"]
+    TOGGLE_RISK["OpenAI toggle 缺陷<br/>/plan 进入时更新 self._system_prompt，<br/>但未同步已有 system message"]
+
+    ASK --> RUNTIME_CONFIRM
+    RUNTIME_CONFIRM -->|已缓存或用户同意| EXECUTE
+    RUNTIME_CONFIRM -->|用户拒绝| REJECT
+    ACTIVE -.-> ENFORCEMENT_RISK
+    EXIT_TOOL -.-> CONTENT_RISK
+    ENTER -.-> TOGGLE_RISK
+
+    classDef actor fill:#FFF2B2,stroke:#9A6700,stroke-width:2px,color:#3B2A00
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    classDef state fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    classDef success fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
+
+    class CALL,RUNTIME_CONFIRM actor
+    class BYPASS,RULE_DENY,RULE_ALLOW,READ,PLAN,PLAN_EDIT,PLAN_PATH,PLAN_SHELL,PLAN_TOOL,ACCEPT,CONFIRM,DONTASK,ASK,EXIT_TOOL control
+    class MODE_RESOLVE,NORMAL,INIT,ENTER,ACTIVE,TOGGLE_EXIT,FALLBACK,RESTORED state
+    class ALLOW_BYPASS,ALLOW_RULE,ALLOW_READ,ALLOW_PLAN_FILE,ALLOW_PLAN_TOOL,ALLOW_EDIT,ALLOW_DEFAULT,EXECUTE success
+    class DENY_RULE,DENY_PLAN_EDIT,DENY_PLAN_SHELL,DENY_DONTASK,REJECT,ASYNC_BUG error
+    class ENFORCEMENT_RISK,CONTENT_RISK,TOGGLE_RISK note
+    class EXPECTED external
+
+    style PERMISSION fill:#FFF9F0,stroke:#A85D00,stroke-width:2px,color:#4A2900
+    style PLAN_STATE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
