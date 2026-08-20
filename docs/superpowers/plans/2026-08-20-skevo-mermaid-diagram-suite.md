@@ -291,7 +291,7 @@ flowchart LR
 
     subgraph VISIBILITY["阶段 2 · 模型可见性与按需激活"]
         direction TB
-        PROMPT["System Prompt<br/>仅列未激活的默认 deferred 名称"]
+        PROMPT["build_system_prompt<br/>列出未激活的默认 deferred 名称"]
         SEARCH["tool_search<br/>eager tool"]
         ACTIVE["active tool definitions<br/>当前 self.tools 中非 deferred<br/>或已激活的成员"]
         MODEL["◇ 模型请求"]
@@ -313,10 +313,10 @@ flowchart LR
     end
 
     EAGER -->|无 custom_tools：初始 self.tools| ACTIVE
-    EAGER -->|包含| SEARCH -->|无 custom_tools 时暴露| ACTIVE
+    EAGER -->|包含| SEARCH -->|当前 self.tools 包含时暴露| ACTIVE
     CUSTOM -->|非空时替换 default<br/>成为初始 self.tools| ACTIVE
     MCPDEF -->|成功后追加到当前 self.tools| ACTIVE
-    DEFERRED --> PROMPT --> MODEL
+    DEFERRED -->|未使用 custom_system_prompt| PROMPT --> MODEL
     ACTIVE -->|完整 schemas| MODEL
     MODEL --> CALL --> PERMISSION
     PERMISSION -->|allow| DISPATCH
