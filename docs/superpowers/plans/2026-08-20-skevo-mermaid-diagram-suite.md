@@ -558,6 +558,9 @@ config:
   theme: base
   look: classic
   layout: elk
+  elk:
+    mergeEdges: true
+    nodePlacementStrategy: SIMPLE
   flowchart:
     curve: basis
 ---
@@ -646,7 +649,7 @@ flowchart TB
         TOOL_FOLD -->|trigger=tool| FOLD_GATE
         FOLD_GATE -->|否| NO_FOLD_KIND
         NO_FOLD_KIND -->|manual| MANUAL_NO_FOLD
-        NO_FOLD_KIND -->|tool：结果回写| NEXT_ITERATION
+        NO_FOLD_KIND -->|tool：产生结果| TOOL_RESULT
         NO_FOLD_KIND -->|auto| NEXT_ITERATION
         FOLD_GATE -->|是| TRANSCRIPT --> SIDE_QUERY
         SIDE_QUERY -->|是| FOLDED
