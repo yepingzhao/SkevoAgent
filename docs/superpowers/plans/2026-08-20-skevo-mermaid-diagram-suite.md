@@ -1296,13 +1296,14 @@ config:
   elk:
     mergeEdges: true
     nodePlacementStrategy: SIMPLE
-    cycleBreakingStrategy: GREEDY
+    cycleBreakingStrategy: MODEL_ORDER
     considerModelOrder: NODES_AND_EDGES
   flowchart:
     curve: linear
-    nodeSpacing: 16
+    nodeSpacing: 4
     rankSpacing: 28
-    wrappingWidth: 135
+    wrappingWidth: 50
+    padding: 4
 ---
 %% Purpose: 展示共享的主 Agent Runtime 如何跨越 MCP OS 子进程边界，并在同一 Skevo 进程内创建独立的子 Agent 上下文。
 %% Audience: maintainer
@@ -1318,10 +1319,10 @@ flowchart TB
 
     RUNTIME["⚙ 主 Agent Runtime<br/>共享模型循环、权限入口与工具调度"]
 
-    subgraph MCP_LANE["A · MCP：主进程 Client ↔ 外部 OS 子进程"]
+    subgraph MCP_LANE["A · MCP：主进程 Client<br/>↔ 外部 OS 子进程"]
         direction TB
 
-        subgraph MCP_CLIENT["Skevo 主进程：McpManager / McpConnection Client"]
+        subgraph MCP_CLIENT["Skevo 主进程<br/>McpManager / McpConnection Client"]
             direction TB
             CONFIG["💾 配置覆盖（后者同名覆盖）<br/>~/.skevo/settings.json<br/>→ &lt;cwd&gt;/.skevo/settings.json<br/>→ &lt;cwd&gt;/.mcp.json<br/>无效配置或读取 / JSON 错误静默跳过"]
             LAZY["仅主 Agent 首次 chat<br/>先置 _mcp_initialized = True<br/>再 await MCP lazy load"]
@@ -1338,20 +1339,16 @@ flowchart TB
             CONFIG --> MANAGER
             LAZY --> MANAGER
             MANAGER -->|启动成功后进入握手| HANDSHAKE
-            MANAGER -.->|McpConnection.connect create_task| READER
+            MANAGER -.->|McpConnection.connect<br/>create_task| READER
             HANDSHAKE -->|tools list| DEFINITIONS
             HANDSHAKE -->|异常 / timeout| INIT_FAIL
             MCP_DISPATCH -->|已连接 server| CALL
-            READER -.->|按 id 完成 pending Future| CALL
+            READER -.->|按 id 完成<br/>pending Future| CALL
             CALL -->|content / result| MCP_RETURN
 
-            %% Layout-only invisible links：收窄主进程 Client，不表达握手、reader 和 dispatch 的时序。
-            CONFIG ~~~ LAZY
-            HANDSHAKE ~~~ READER
-            DEFINITIONS ~~~ MCP_DISPATCH
         end
 
-        subgraph MCP_PROCESS["每个 MCP Server：独立 OS 子进程边界"]
+        subgraph MCP_PROCESS["每个 MCP Server<br/>独立 OS 子进程边界"]
             direction TB
             PROCESS["stdio MCP Server 子进程<br/>stdin 接收 initialize / tools/list / tools/call<br/>stdout 返回 JSON-RPC response<br/>stderr 独立管道"]
         end
@@ -1360,12 +1357,12 @@ flowchart TB
         MANAGER -->|server 启动异常| INIT_FAIL
     end
 
-    subgraph SUB_LANE["B · 子 Agent：同一 Skevo 进程、独立上下文"]
+    subgraph SUB_LANE["B · 子 Agent<br/>同一 Skevo 进程、独立上下文"]
         direction TB
 
         ENTRY{"派生入口"}
-        TYPE_CONFIG["agent tool：get_sub_agent_config<br/>project custom > user custom<br/>custom 可覆盖同名内置类型<br/>未知 type 回落 general"]
-        AGENT_TOOLS["agent tool 的 tools<br/>explore / plan：3 个只读工具<br/>general / custom 无白名单：全局 built-ins - agent<br/>custom 白名单：仅过滤全局 built-ins"]
+        TYPE_CONFIG["agent tool：<br/>get_sub_agent_config<br/>project custom > user custom<br/>custom 可覆盖<br/>同名内置类型<br/>未知 type 回落 general"]
+        AGENT_TOOLS["agent tool 的 tools<br/>explore / plan：<br/>3 个只读工具<br/>general / custom 无白名单：<br/>全局 built-ins - agent<br/>custom 白名单：<br/>仅过滤全局 built-ins"]
         SKILL_CONFIG["Skill fork<br/>Skill prompt 成为 base system<br/>args 或默认任务成为新 user message"]
         SKILL_TOOLS["Skill fork 的 tools：从父 self.tools 选择<br/>有真值 allowlist：按名称过滤<br/>无 allowlist：父 tools - agent<br/>因此可能选入 MCP definitions"]
 
@@ -1384,27 +1381,17 @@ flowchart TB
         AWAIT -->|成功| CHILD_RESULT
         AWAIT -->|异常| CHILD_FAIL
 
-        %% Layout-only invisible links：收窄子 Agent 分支，不表达 agent tool 与 Skill fork 的时序。
-        AGENT_TOOLS ~~~ SKILL_CONFIG
-        CHILD_RESULT ~~~ CHILD_FAIL
-
     end
 
     RUNTIME -->|首次主 chat| LAZY
-    RUNTIME -->|获准的 mcp__server__tool| MCP_DISPATCH
-    RUNTIME -->|agent tool / Skill fork| ENTRY
-    DEFINITIONS -->|成功发现：追加 self.tools| RUNTIME
-    MCP_RETURN -->|tool result| RUNTIME
-    CHILD_RESULT -->|文本 + token 增量| RUNTIME
-    CHILD_FAIL -->|错误文本| RUNTIME
+    RUNTIME -->|获准的<br/>mcp__server__tool| MCP_DISPATCH
+    RUNTIME -->|agent tool /<br/>Skill fork| ENTRY
+    RUNTIME <---|成功发现：<br/>追加 self.tools| DEFINITIONS
+    RUNTIME <---|tool result| MCP_RETURN
+    RUNTIME <---|文本 +<br/>token 增量| CHILD_RESULT
+    RUNTIME <---|错误文本| CHILD_FAIL
 
-    %% Layout-only invisible links：风险注记不伪装成控制流，并保持 A、B 边界纵向分区。
-    DEFINITIONS ~~~ MCP_RETURN
-    MCP_RETURN ~~~ MCP_RISK
-    MCP_RISK ~~~ PROCESS
-    PROCESS ~~~ ENTRY
-    CHILD_RESULT ~~~ SUB_RISK
-    CHILD_FAIL ~~~ SUB_RISK
+    %% A / B 边界由 Runtime 的调用边独立定位；风险注记不表达控制流。
 
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
@@ -1437,13 +1424,13 @@ mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents-
 mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents-800.png -b white -s 1
 ```
 
-Expected: all commands exit 0; SVG includes `accTitle` / `accDescr` ARIA metadata and has an intrinsic width no greater than about 1250 px. With the configured 17 px base font, the 800 px preview must retain an equivalent body size of at least about 11.5 px (`17 × rendered_width / SVG_width`). The main-process `McpManager / McpConnection Client` subgraph contains handshake, reader, pending call, definitions, dispatch and result conversion; the external MCP OS subprocess subgraph contains exactly the single `PROCESS` business node. Only `McpConnection.connect create_task` and response delivery use dashed asynchronous edges, and the response edge is strictly `READER -.-> CALL`; the reader text also explains that it wakes initialize / tools/list waiters. Confirm all three concrete config paths and silent invalid/error skipping, protocol version `2024-11-05`, `notifications/initialized`, first-main-chat one-shot lazy load and per-server partial failure. The teardown note must state that successful server processes persist until `disconnect_all` or host exit; `disconnect_all` calls every connection `close()`, clears manager `_connections` and `_tools`, and sets manager `_connected = False`, but does not reset `Agent._mcp_initialized`, while the current Agent never invokes that teardown automatically. The MCP risk note must distinguish thrown connection / JSON-RPC / write errors from stdout EOF that leaves pending Futures unresolved, the write-before-Future-registration race, and runtime `tools/call` without timeout. The sub-agent half must distinguish `agent` tool configuration from Skill fork selection; show same-process but isolated prompt/messages/loop state, parent-plan versus bypass permission initialization, awaited execution, successful token accounting, exception token gap, disabled main-agent lifecycle, empty-tools fallback, MCP-definition-without-connection risk, incomplete model-client configuration inheritance and the OpenAI `oai_checked` same-batch replay defect. Exactly four solid return edges must close the loop to the shared Runtime: definitions / `self.tools`, MCP tool result, child text plus token delta, and child error text. Inspect SVG, 2x PNG and 800px PNG for clipping, overlap, edge-label collisions, return edges crossing nodes, and readable body text. Verify the Mermaid block in this Task 9 section is byte-for-byte identical to `docs/diagrams/mmd/09-mcp-and-subagents.mmd`, then run `git diff --check`.
+Expected: all commands exit 0; SVG includes `accTitle` / `accDescr` ARIA metadata and has an intrinsic width no greater than about 1250 px. With the configured 17 px base font, the 800 px preview must retain an equivalent body size of at least about 11.5 px (`17 × rendered_width / SVG_width`). `RUNTIME` must be the first-screen top/central hub, with all three invocation edges entering the MCP and sub-agent boundaries downward. The four returns are declared as `RUNTIME <---|label| SOURCE`: their visible arrowheads still terminate at `RUNTIME`, while MODEL_ORDER keeps the Runtime first in ranking; they must route around the perimeter without crossing business nodes. The main-process `McpManager / McpConnection Client` subgraph contains handshake, reader, pending call, definitions, dispatch and result conversion; the external MCP OS subprocess subgraph contains exactly the single `PROCESS` business node. Only `McpConnection.connect create_task` and response delivery use dashed asynchronous edges, and the response edge is strictly `READER -.-> CALL`; the reader text also explains that it wakes initialize / tools/list waiters. Confirm all three concrete config paths and silent invalid/error skipping, protocol version `2024-11-05`, `notifications/initialized`, first-main-chat one-shot lazy load and per-server partial failure. The teardown note must state that successful server processes persist until `disconnect_all` or host exit; `disconnect_all` calls every connection `close()`, clears manager `_connections` and `_tools`, and sets manager `_connected = False`, but does not reset `Agent._mcp_initialized`, while the current Agent never invokes that teardown automatically. The MCP risk note must distinguish thrown connection / JSON-RPC / write errors from stdout EOF that leaves pending Futures unresolved, the write-before-Future-registration race, and runtime `tools/call` without timeout. The sub-agent half must distinguish `agent` tool configuration from Skill fork selection; show same-process but isolated prompt/messages/loop state, parent-plan versus bypass permission initialization, awaited execution, successful token accounting, exception token gap, disabled main-agent lifecycle, empty-tools fallback, MCP-definition-without-connection risk, incomplete model-client configuration inheritance and the OpenAI `oai_checked` same-batch replay defect. Exactly four solid return edges must close the loop to the shared Runtime: definitions / `self.tools`, MCP tool result, child text plus token delta, and child error text. Inspect SVG, 2x PNG and 800px PNG for clipping, overlap, edge-label collisions, return edges crossing nodes, and readable body text. Verify the Mermaid block in this Task 9 section is byte-for-byte identical to `docs/diagrams/mmd/09-mcp-and-subagents.mmd`, then run `git diff --check`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add docs/diagrams/mmd/09-mcp-and-subagents.mmd docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md docs/superpowers/plans/2026-08-20-skevo-mermaid-diagram-suite.md
-git commit -m "docs: clarify MCP teardown lifecycle"
+git commit -m "docs: center Runtime in boundary diagram"
 ```
 
 ### Task 10: Regenerate all SVG and PNG outputs
