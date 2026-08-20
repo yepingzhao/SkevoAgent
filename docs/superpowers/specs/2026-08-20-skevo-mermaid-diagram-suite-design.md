@@ -247,9 +247,11 @@ Memory prefetch 的并发边界：运行时先把本轮 user message 追加到 b
 
 structured folding：manual 来自 REPL 在 `chat` 外直接调用的 `/compact` → `Agent.compact`；tool 来自模型工具执行中的 `compact_context` → `_compact_conversation(trigger="tool")`；auto 只在工具批次结束且上一次模型输入超过 effective window 的 70% 时检查。三种入口共用“对应 backend messages 至少 4 条且 transcript 非空”的 gate。生成 folded state 后，运行时先追加内存 `_folded_session_memories`，再尝试 `save_folded_session_memory`，最后替换 backend messages；artifacts 写入异常会被吞掉，不能阻断消息替换。OpenAI 替换时额外保留 system message。Anthropic 和 OpenAI 两条路径都只在 tool folding 成功后设置 `_context_cleared = True`，把该工具结果作为新的 user message，停止当前批次剩余工具并触发 context break；REPL `/compact` 不产生 tool result，也不进入 context-break 后果。
 
+下一迭代控制流：普通工具批次写回结果后先执行 auto decision；`last_input_token_count` 不超过 effective window 的 70% 时直接汇入 `NEXT_ITERATION`，超过时才以 `trigger=auto` 进入 folding gate。普通工具的 auto-no、tool folding 成功后的 context break、auto folding 成功以及 tool/auto folding gate 未通过，都必须先汇入 `NEXT_ITERATION`，再统一执行 `_run_compression_pipeline` 的字符预算、stale snipping、idle microcompact、Memory settled 检查，最后调用后续模型 API，不允许任何分支跳过这条每轮顶部链。REPL `/compact` 位于 `chat` 外，manual folding 成功或 gate 未通过都只返回 REPL，不进入 `NEXT_ITERATION`。
+
 OpenAI/Anthropic messages 转为 transcript 时，普通 message content 按 12k chars clip，最终 transcript 按 80k chars clip；OpenAI `tool_call.arguments` 没有独立的 12k clip，只受最终总长限制。随后由 side query 生成 episode/working/tool memory；side query 不可用、调用失败或 JSON 解析失败时使用 fallback。
 
-持久化边界：只有主 Agent `chat` 正常收尾才尝试 `_auto_save` Session JSON，写入失败异常同样被忽略。REPL `/compact` 会立即走 folded-memory artifacts 的保存尝试，但若之后没有一次正常收尾的 `chat`，其内存 folded list 不会进入 Session JSON。
+持久化边界：首轮或后续模型 API 返回 final answer / 无 tool call 时，控制流进入主 Agent `chat` 正常收尾，再尝试 `_auto_save` Session JSON；写入失败异常被忽略。REPL `/compact` 会立即走 folded-memory artifacts 的保存尝试，但若之后没有一次正常收尾的主 Agent `chat`，其内存 folded list 不会进入 Session JSON；后续 `chat` 正常收尾时才会由 `_auto_save` 保存该列表。
 
 `--resume` 使用 `get_latest_session_id` 从用户级全局 `~/.skevo/sessions/*.json` 中仅按 metadata `startTime` 选择 latest，不按 `cwd`、project 或 backend 筛选。CLI 会先按当前参数创建新 Agent，再加载 Session，并把 `anthropicMessages` / `openaiMessages` 传给 `Agent.restore_session`；恢复过程不校验或转换保存 backend 与当前 backend。backend 不匹配时，保存历史进入非活动消息列表，当前模型看不到。同 backend OpenAI 恢复会让保存 messages 中的旧 system message 覆盖新 Agent 的当前 prompt，且恢复后的首轮调用前没有 refresh，旧日期、cwd、Git、rules、Memory index 等上下文可能继续生效。已写入历史的 folded user message 可随同 backend messages 恢复，但项目 folded-memory artifacts 不参与恢复，Session JSON 的 `foldedSessionMemories` 列表也不恢复；保存的 `id`、`model`、`cwd`、`startTime` 等 metadata 同样没有恢复，仍使用新建 Agent 的当前值。图中必须把这些风险标出，不得画成完整恢复路径。
 
