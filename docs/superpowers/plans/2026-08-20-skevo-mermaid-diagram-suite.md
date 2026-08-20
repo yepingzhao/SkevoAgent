@@ -762,20 +762,25 @@ flowchart TD
     USER_SKILLS[("💾 ~/.skevo/skills")]
     PROJECT_SKILLS[("💾 项目 .skevo/skills")]
     LOAD["加载 SKILL.md frontmatter"]
-    DEFINITIONS["★ SkillDefinition cache<br/>项目同名项覆盖用户级"]
+    DEFINITIONS["★ SkillDefinition cache<br/>用户级同名项优先；项目级不覆盖"]
     REQUEST["👤 用户请求"]
-    BM25["BM25 检索<br/>metadata 加权 + instructions"]
+    BM25["BM25 检索<br/>metadata 词频 ×3 + 正文前 2500 chars<br/>score ≥ 0.08，最多 top 3"]
     HITS{"有相关 Skill?"}
     SUMMARY["top 3 metadata<br/>retrieved_skills"]
     MODEL["◇ 模型判断是否调用"]
     EXPLICIT["/<skill-name> args"]
     LOOKUP["get_skill_by_name"]
-    EXECUTE["execute_skill<br/>resolve_skill_prompt"]
+    USER_OK{"存在且 user_invocable?"}
+    FALLBACK["按普通文本进入 Agent.chat<br/>不直接返回 Unknown"]
+    FORK_REQUEST["fork slash：请求模型调用 skill tool"]
+    TOOL_CALL["模型调用 skill tool"]
+    EXECUTE["execute_skill<br/>按 name 再次查找"]
     KNOWN{"Skill 存在?"}
     STATS["记录 invocation stats"]
+    RESOLVE["resolve_skill_prompt<br/>参数与 Skill 目录占位符"]
     MODE{"context mode"}
     INLINE["inline：Prompt 回到当前 Agent Loop"]
-    FORK["fork：工具白名单 + 隔离 Agent<br/>详见图 09"]
+    FORK["fork：按 allowed_tools 当前真值语义选工具<br/>隔离 system prompt / history；详见图 09"]
     ERROR["❌ Unknown Skill / Skill fork error"]
 
     USER_SKILLS --> LOAD
@@ -786,12 +791,15 @@ flowchart TD
     BM25 --> HITS
     HITS -->|否| MODEL
     HITS -->|是| SUMMARY --> MODEL
-    MODEL -->|调用 skill| EXECUTE
-    EXPLICIT --> LOOKUP --> EXECUTE
+    MODEL -->|调用 skill| TOOL_CALL --> EXECUTE
+    EXPLICIT --> LOOKUP --> USER_OK
+    USER_OK -->|否| FALLBACK --> REQUEST
+    USER_OK -->|是：inline| EXECUTE
+    USER_OK -->|是：fork| FORK_REQUEST --> MODEL
     DEFINITIONS --> LOOKUP
     EXECUTE --> KNOWN
     KNOWN -->|否| ERROR
-    KNOWN -->|是| STATS --> MODE
+    KNOWN -->|是| STATS --> RESOLVE --> MODE
     MODE -->|inline| INLINE
     MODE -->|fork| FORK
 
@@ -805,8 +813,9 @@ flowchart TD
     class REQUEST,EXPLICIT actor
     class MODEL model
     class USER_SKILLS,PROJECT_SKILLS,LOAD,DEFINITIONS,STATS state
-    class BM25,HITS,LOOKUP,KNOWN,MODE control
-    class SUMMARY,EXECUTE,INLINE,FORK extension
+    class BM25,HITS,LOOKUP,USER_OK,KNOWN,MODE control
+    class SUMMARY,FORK_REQUEST,TOOL_CALL,EXECUTE,RESOLVE,INLINE,FORK extension
+    class FALLBACK state
     class ERROR error
 ```
 

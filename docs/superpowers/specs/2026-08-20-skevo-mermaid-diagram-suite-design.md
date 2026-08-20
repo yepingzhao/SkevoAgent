@@ -268,14 +268,14 @@ OpenAI/Anthropic messages 转为 transcript 时，普通 message content 按 12k
 
 内容：
 
-- 用户级 `~/.skevo/skills` 与项目级 `.skevo/skills`；项目同名 Skill 覆盖用户级。
+- 用户级 `~/.skevo/skills` 与项目级 `.skevo/skills`；当前实现先加载用户级，项目级同名 Skill 不覆盖用户级。
 - `SKILL.md` frontmatter 解析为 `SkillDefinition`，并进入发现缓存。
 - 自动路径：用户请求经 tokenize/BM25 返回 top 3 摘要，注入 `<retrieved_skills>`，模型再决定是否调用。
-- 显式路径：`/<skill-name> args` 通过 `get_skill_by_name` 调用。
-- 共同路径：`execute_skill`、`resolve_skill_prompt`、invocation stats、`inline`/`fork`。
-- `inline` 把完整 Prompt 返回当前 Agent Loop。
-- `fork` 根据 `allowed_tools` 创建隔离 Agent，并将最终文本和 token 增量返回。
-- 未知 Skill 和 fork 异常转换为明确错误文本。
+- 显式路径：`/<skill-name> args` 先经 `get_skill_by_name` 检查存在性与 `user_invocable`；不满足时按普通聊天文本处理。inline 直接执行，fork 则先让当前 Agent 请求模型调用 `skill` tool。
+- 真正调用路径：`execute_skill` 找到 Skill 后先写 invocation stats，再由 `resolve_skill_prompt` 解析参数与 Skill 目录占位符，最后进入 `inline`/`fork`。
+- `inline` 在模型工具路径中把完整 Prompt 作为 tool result 返回当前 Agent Loop；REPL inline 路径以该 Prompt 开启当前主 Agent 的新 `chat`。
+- `fork` 按 `allowed_tools` 的当前真值语义选择父 Agent 工具，创建具有独立 system prompt 和消息历史的子 Agent，并将最终文本和 token 增量返回。
+- 模型工具调用未知 Skill 时返回明确错误文本；未知或不可用户调用的 REPL slash 命令落回普通聊天；fork 的 `run_once` 异常转换为错误文本。
 
 排除：在线 add/merge/discard、replay、champion 和 MCP 初始化。
 
