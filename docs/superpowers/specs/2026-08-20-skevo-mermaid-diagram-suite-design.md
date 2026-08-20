@@ -324,30 +324,37 @@ Promotion gate：`unobserved`、`incubating`、`pruned` 不晋升且保留原 st
 ### 6.9 `09-mcp-and-subagents.mmd`
 
 图内标题：MCP 进程边界与子 Agent 上下文边界
-图型：`flowchart LR`
+图型：`flowchart TB`
 读者：维护者
-目的：解释 Runtime 如何跨越外部进程和隔离上下文边界。
+目的：解释共享的主 Agent Runtime 如何跨越 MCP OS 子进程边界，并在同一 Skevo 进程内创建隔离的子 Agent 上下文。
 
 MCP 侧：
 
-- 配置覆盖顺序为用户级 settings、项目级 settings、项目 `.mcp.json`。
-- 每个 server 经 stdio 子进程完成 initialize、initialized notification、tools/list 和 tools/call。
-- 工具包装为 `mcp__server__tool`。
-- 单 server 失败只关闭自身，不阻断其他 server 和主对话。
-- 仅主 Agent 首次 `chat` 时懒加载 MCP。
+- `McpManager` 位于 Skevo 主进程；只有每个 MCP Server 是独立 OS 子进程，不得把 manager 画进外部进程边界。
+- 配置按用户级 `~/.skevo/settings.json` → 项目级 `.skevo/settings.json` → 项目 `.mcp.json` 读取；只有含 `command` 的有效 server 对象参与合并，后者按同名 server 覆盖前者，无效文件或配置静默跳过。
+- 仅主 Agent 首次 `chat` 尝试懒加载。`Agent._mcp_initialized` 和 manager `_connected` 都在实际连接前设置；因此初始化失败后的后续 `chat` 不会自动重试。
+- 每个 server 通过 `create_subprocess_exec` 启动 stdio 子进程；stdout 由后台 reader task 按 JSON-RPC response id 完成 pending Future。初始化顺序为 awaited `initialize` request → `notifications/initialized` notification → awaited `tools/list` request，`initialize` 和 `tools/list` 各自最多等待 15 秒。
+- 只有握手和工具发现都成功的 connection 才登记；definition 包装为 `mcp__server__tool` 并追加到当前主 Agent `self.tools`。`tools/call` 依赖已登记 connection，标准 content list 只拼接 text blocks，其他 result 转 JSON 字符串。
+- 单 server 启动、初始化或发现失败时只关闭该 connection，继续其他 server 且不阻断主对话。成功子进程持续到 `disconnect_all` 或宿主退出；`disconnect_all` 关闭全部 connection、清空 definitions 并重置 manager `_connected`，但不重置 `Agent._mcp_initialized`，且当前 `Agent` 没有自动调用该 teardown。
+- 调用期的未连接、JSON-RPC 或 transport 异常会向上抛出，`tools/call` 没有 timeout：Anthropic 工具路径会把异常转成 tool error 文本，OpenAI 执行路径则可能终止当前 Agent Loop。
 
 子 Agent 侧：
 
 - 入口为 `agent` tool 或 Skill fork。
-- 内置类型为 `explore`、`plan`、`general`，另支持 custom agents。
-- `explore`/`plan` 只获得读取工具；`general` 获得除 `agent` 外的工具；custom 和 Skill fork 可使用白名单。
-- 子 Agent 拥有独立 system prompt、messages 和 Agent Loop；不执行主 Agent 的 Memory 注入、MCP 懒加载或在线演化。
-- 子 Agent 不获得 `agent` 工具，阻止递归派生。
-- 最终只返回文本和 token 增量；异常转换为错误文本。
+- `agent` tool 的内置类型是 `explore`、`plan`、`general`，另支持 user / project custom agents；project 同名 custom 覆盖 user，custom 名称可以覆盖内置类型，未知 type 回落 `general`。
+- `explore` / `plan` 只获得 `read_file`、`list_files`、`grep_search`。`general` 和未声明白名单的 custom 获得全局 built-ins 中除 `agent` 外的工具；custom 白名单也只过滤全局 built-ins，不从父 Agent 当前 tools 继承 MCP definitions。
+- Skill fork 把 Skill prompt 作为新 Agent base system，把 args 或默认任务作为新 user message。有真值 `allowed_tools` 时按名称过滤父 Agent 当前 `self.tools`，否则使用父 tools 中除 `agent` 外的集合；因此只有 Skill fork 可以把父 MCP definitions 选入子 Agent。
+- 新 Agent 与父 Agent 位于同一 OS 进程，但拥有独立 system prompt、messages、session id 和 Agent Loop，并沿用父 Agent 的 model 名称。父 Agent 为 Plan Mode 时，子 Agent 使用 `plan` 权限并生成自己的 plan path / prompt；否则一律使用 `bypassPermissions`。
+- `is_sub_agent=True` 禁用 Skill 检索增强、pending extraction window、Memory prefetch、MCP 懒加载、usage tracking、在线演化和 Session auto-save；子 Agent 仍使用自己的 Agent Loop 和获授的工具。
+- 父 Agent awaited `run_once`；`agent` 和 `skill` 不在 `CONCURRENCY_SAFE_TOOLS` 中，因此同批多个派生调用按顺序执行，不是后台任务。成功时只把最终文本和 input / output token 增量回传父 Agent；异常转为 `Sub-agent error` 或 `Skill fork error` 文本，且异常前子 Agent 已消耗 token 当前不回计父 Agent。
 
-必须标记的实现风险：子 Agent 可以继承主 Agent 的 MCP tool definitions，但新的 `McpManager` 不会在 `is_sub_agent=True` 时连接；因此继承 definition 不等于拥有可用 MCP connection。
+必须标记的实现风险：
 
-权威锚点：`McpConnection`、`McpManager.load_and_connect`、`McpManager.get_tool_definitions`、`McpManager.call_tool`、`get_sub_agent_config`、`Agent._execute_agent_tool`、`Agent._execute_skill_tool`。
+- 子 Agent 工具白名单无命中或解析为空时，过滤结果 `[]` 传入 `Agent`，但 `self.tools = custom_tools or tool_definitions` 会回退全部默认 tools，并重新包含 `agent`；因此“阻止递归派生”不是无条件保证。
+- Skill fork 可以继承父 Agent 的 MCP tool definition，但新 `McpManager` 在 `is_sub_agent=True` 时不连接；definition 不等于可用 connection。
+- 子 Agent 的 model Client 配置未完整继承：OpenAI 路径只显式复制 `api_base`，Anthropic 路径不复制 custom base URL，两者都没有显式复制父 Agent `api_key`，实际还依赖对应 SDK 环境变量。
+
+权威锚点：`McpConnection.connect`、`McpConnection.initialize`、`McpConnection.list_tools`、`McpConnection.call_tool`、`McpConnection.close`、`McpManager.load_and_connect`、`McpManager.get_tool_definitions`、`McpManager.call_tool`、`McpManager.disconnect_all`、`get_sub_agent_config`、`Agent.chat`、`Agent.run_once`、`Agent._execute_agent_tool`、`Agent._execute_skill_tool`。
 
 ## 7. Mermaid 源码规范
 

@@ -1289,83 +1289,138 @@ git commit -m "docs: correct Skill evaluation gate order"
 title: MCP 进程边界与子 Agent 上下文边界
 config:
   theme: base
+  themeVariables:
+    fontSize: 14px
   look: classic
   flowchart:
-    curve: basis
+    curve: linear
+    nodeSpacing: 24
+    rankSpacing: 30
+    wrappingWidth: 155
 ---
-%% Purpose: 展示 Runtime 跨越 MCP 进程边界和子 Agent 上下文边界的方式。
+%% Purpose: 展示共享的主 Agent Runtime 如何跨越 MCP OS 子进程边界，并在同一 Skevo 进程内创建独立的子 Agent 上下文。
 %% Audience: maintainer
 %% Sources: agents/mcp_client.py, agents/subagent.py, agents/agent.py
-%% Anchors: McpManager.load_and_connect, McpManager.get_tool_definitions, McpManager.call_tool, get_sub_agent_config, Agent._execute_agent_tool, Agent._execute_skill_tool
-%% Out of scope: 通用权限决策和 Skill 检索。
+%% Anchors: McpConnection.connect, McpConnection.initialize, McpConnection.list_tools, McpConnection.call_tool, McpConnection.close, McpManager.load_and_connect, McpManager.get_tool_definitions, McpManager.call_tool, McpManager.disconnect_all, get_sub_agent_config, Agent.chat, Agent.run_once, Agent._execute_agent_tool, Agent._execute_skill_tool
+%% Verified: 2026-08-20 against the current Python implementation.
+%% Symbols: 🔌 MCP；◎ 子 Agent；⚙ Runtime；💾 configuration / definition；❌ error；⚠ implementation risk。
+%% Out of scope: 通用权限决策树、Skill inline 执行、模型后端流式协议细节。
 
-flowchart LR
-    RUNTIME["⚙ 主 Agent Runtime"]
+flowchart TB
+    accTitle: MCP 进程边界与子 Agent 上下文边界
+    accDescr: 中央主 Agent Runtime 共享两条扩展路径。MCP 路径从三级配置覆盖和首次主 chat 的一次性懒加载开始，由主进程内的 McpManager 启动每个独立 stdio OS 子进程，完成 JSON-RPC 握手、工具发现与调用；子 Agent 路径则在同一 Skevo 进程中创建具有独立 prompt、messages 和 Agent Loop 的新 Agent，并区分通用 agent 工具与 Skill fork 的工具选择、权限、隔离、结果和风险。
 
-    subgraph MCP_BOUNDARY["MCP 进程边界"]
-        CONFIG["配置覆盖<br/>用户 settings → 项目 settings → .mcp.json"]
-        MANAGER["🔌 McpManager"]
-        PROCESS["stdio MCP 子进程"]
-        HANDSHAKE["initialize → initialized → tools/list"]
-        DEFINITIONS["mcp__server__tool definitions"]
-        ROUTE["解析 server / tool name<br/>tools/call"]
-        MCP_RESULT["MCP content → tool result"]
-        MCP_FAIL["⚠ 单 server 失败只关闭自身"]
-        CONFIG --> MANAGER --> PROCESS --> HANDSHAKE --> DEFINITIONS
-        ROUTE --> PROCESS --> MCP_RESULT
-        PROCESS -.-> MCP_FAIL
+    RUNTIME["⚙ 主 Agent Runtime<br/>共享模型循环、权限入口与工具调度"]
+
+    subgraph MCP_LANE["A · MCP：主进程 Client ↔ 外部 OS 子进程"]
+        direction TB
+
+        CONFIG["💾 配置覆盖<br/>有效 user settings → project settings → project .mcp.json<br/>后者按同名 server 覆盖"]
+        LAZY["仅主 Agent 首次 chat<br/>先置 _mcp_initialized = True<br/>再 await MCP lazy load"]
+        MANAGER["🔌 主进程内 McpManager<br/>先置 _connected = True<br/>再按 server 顺序连接"]
+
+        subgraph MCP_PROCESS["每个 MCP Server：独立 OS 子进程边界"]
+            direction TB
+            PROCESS["stdio 子进程<br/>stdin / stdout JSON-RPC<br/>stderr 独立管道"]
+            HANDSHAKE["await initialize request<br/>→ initialized notification<br/>→ await tools/list request"]
+            READER["stdout 后台 reader task<br/>按 response id 完成 pending Future"]
+            CALL["await tools/call request<br/>{name, arguments}"]
+
+            PROCESS -->|initialize 与 list<br/>各自最多 15 s| HANDSHAKE
+            PROCESS -.->|create_task；持续读行| READER
+            CALL -.->|response 由 reader 分发| READER
+        end
+
+        DEFINITIONS["💾 握手成功后生成 definitions<br/>mcp__server__tool<br/>追加当前主 Agent self.tools"]
+        INIT_FAIL["❌ 单 server 启动 / 初始化 / 发现失败<br/>关闭该 connection；继续其他 server<br/>不阻断主 chat"]
+        MCP_DISPATCH["🔌 MCP 调用路由<br/>解析 mcp__server__tool<br/>查找已登记 connection"]
+        MCP_RETURN["返回主 Runtime 的 tool result<br/>content text blocks 拼接；否则 JSON"]
+        MCP_RISK["⚠ manager 与调用期风险<br/>load 前即置 _connected = True，失败后续 chat 不自动重试<br/>成功进程持续到 disconnect_all 或宿主退出<br/>disconnect_all 重置 manager，但不重置 Agent flag；Agent 未自动调用<br/>未连接 / JSON-RPC / transport error 会抛出；tools/call 无 timeout<br/>Anthropic 转为 tool error 文本；OpenAI 可能终止当前 loop"]
+
+        CONFIG --> MANAGER
+        LAZY --> MANAGER
+        MANAGER -->|create_subprocess_exec| PROCESS
+        MANAGER -->|server 启动异常| INIT_FAIL
+        HANDSHAKE -->|tools list| DEFINITIONS
+        HANDSHAKE -->|异常 / timeout| INIT_FAIL
+
+        MCP_DISPATCH -->|已连接 server| CALL
+        CALL -->|content / result| MCP_RETURN
     end
 
-    subgraph SUB_BOUNDARY["子 Agent 上下文边界"]
-        ENTRY["agent tool / Skill fork"]
-        CONFIG_AGENT["get_sub_agent_config"]
-        TYPES["explore / plan / general / custom"]
-        TOOLS["只读集合 / allowed-tools<br/>或除 agent 外的工具"]
-        CHILD["◎ 新 Agent<br/>独立 prompt / messages / loop"]
-        ISOLATION["is_sub_agent = True<br/>无 Memory 注入 / MCP 懒加载 / 在线演化"]
-        CHILD_RESULT["最终文本 + token 增量"]
-        CHILD_FAIL["❌ Sub-agent / Skill fork error"]
-        ENTRY --> CONFIG_AGENT --> TYPES --> TOOLS --> CHILD
-        CHILD --> ISOLATION --> CHILD_RESULT
-        CHILD --> CHILD_FAIL
+    subgraph SUB_LANE["B · 子 Agent：同一 Skevo 进程、独立上下文"]
+        direction TB
+
+        ENTRY{"派生入口"}
+        TYPE_CONFIG["agent tool：get_sub_agent_config<br/>project custom > user custom<br/>custom 可覆盖同名内置类型<br/>未知 type 回落 general"]
+        AGENT_TOOLS["agent tool 的 tools<br/>explore / plan：3 个只读工具<br/>general / custom 无白名单：全局 built-ins - agent<br/>custom 白名单：仅过滤全局 built-ins"]
+        SKILL_CONFIG["Skill fork<br/>Skill prompt 成为 base system<br/>args 或默认任务成为新 user message"]
+        SKILL_TOOLS["Skill fork 的 tools：从父 self.tools 选择<br/>有真值 allowlist：按名称过滤<br/>无 allowlist：父 tools - agent<br/>因此可能选入 MCP definitions"]
+
+        CHILD["◎ 同进程内新 Agent 实例<br/>独立 system prompt / messages / session id / Agent Loop<br/>model 名称沿用父 Agent"]
+        PERMISSION["权限初始化<br/>父 mode = plan → 子 mode = plan<br/>并生成专属 plan path / prompt<br/>否则一律 bypassPermissions"]
+        ISOLATION["is_sub_agent = True 禁用主生命周期<br/>无 Skill 检索 / pending window / Memory prefetch<br/>无 MCP lazy load / usage tracking / 在线演化<br/>无 Session auto-save"]
+        AWAIT["父 Agent await run_once<br/>agent / skill 不是 concurrency-safe tools<br/>同批多个派生调用按顺序执行，不在后台运行"]
+        CHILD_RESULT["成功：返回最终文本或空输出占位<br/>父 Agent 累加 input / output token 增量"]
+        CHILD_FAIL["❌ run_once 异常转为错误文本<br/>Sub-agent error / Skill fork error<br/>异常前已消耗 token 不回计父 Agent"]
+
+        SUB_RISK["⚠ 当前实现边界风险<br/>1. 白名单过滤为空时，custom_tools or tool_definitions 回退全部默认 tools<br/>并重新包含 agent，递归派生保护失效<br/>2. 仅 Skill fork 可选入父 MCP definition；子 McpManager 未连接<br/>definition ≠ 可用 connection<br/>3. OpenAI 仅显式复制 api_base；Anthropic 不复制 custom base<br/>两者均不显式复制 api_key，仍依赖 SDK 环境变量"]
+
+        ENTRY -->|agent tool| TYPE_CONFIG --> AGENT_TOOLS --> CHILD
+        ENTRY -->|Skill fork| SKILL_CONFIG --> SKILL_TOOLS --> CHILD
+        CHILD --> PERMISSION --> ISOLATION --> AWAIT
+        AWAIT -->|成功| CHILD_RESULT
+        AWAIT -->|异常| CHILD_FAIL
+
     end
 
-    RUNTIME -->|首次 chat| MANAGER
-    DEFINITIONS -->|追加 self.tools| RUNTIME
-    RUNTIME -->|mcp__server__tool| ROUTE
-    MCP_RESULT --> RUNTIME
-    RUNTIME --> ENTRY
-    CHILD_RESULT --> RUNTIME
-    CHILD_FAIL --> RUNTIME
-    RISK["⚠ 子 Agent 可继承 MCP definitions<br/>但新的 McpManager 未连接<br/>definition 不等于可用 connection"]
-    DEFINITIONS -.-> TOOLS
-    TOOLS -.-> RISK
+    RUNTIME -->|首次主 chat| LAZY
+    RUNTIME -->|获准的 mcp__server__tool| MCP_DISPATCH
+    RUNTIME -->|agent tool / Skill fork| ENTRY
+
+    %% Layout-only invisible links：风险注记不伪装成控制流，并保持 A、B 边界纵向分区。
+    DEFINITIONS ~~~ MCP_RETURN
+    MCP_RETURN ~~~ MCP_RISK
+    MCP_RISK ~~~ ENTRY
+    CHILD_RESULT ~~~ SUB_RISK
+    CHILD_FAIL ~~~ SUB_RISK
 
     classDef runtime fill:#DCEAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
     classDef state fill:#E2F5E7,stroke:#26733D,stroke-width:2px,color:#123D20
+    classDef control fill:#FFE8C2,stroke:#A85D00,stroke-width:2px,color:#4A2900
     classDef extension fill:#EFE3FF,stroke:#7040A8,stroke-width:2px,color:#32184F
-    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
+    classDef external fill:#ECEFF3,stroke:#53606F,stroke-width:2px,color:#202833
     classDef note fill:#FFF4CC,stroke:#A15C00,stroke-width:2px,color:#3A2600
+    classDef error fill:#FFE0E0,stroke:#B42318,stroke-width:2px,color:#5A0B0B
 
     class RUNTIME runtime
-    class CONFIG,CONFIG_AGENT,TOOLS,ISOLATION state
-    class MANAGER,PROCESS,HANDSHAKE,DEFINITIONS,ROUTE,MCP_RESULT,ENTRY,TYPES,CHILD,CHILD_RESULT extension
-    class CHILD_FAIL error
-    class MCP_FAIL,RISK note
+    class CONFIG,DEFINITIONS,MCP_RETURN,TYPE_CONFIG,AGENT_TOOLS,SKILL_CONFIG,SKILL_TOOLS,PERMISSION,ISOLATION,AWAIT,CHILD_RESULT state
+    class ENTRY control
+    class LAZY state
+    class MANAGER,MCP_DISPATCH,CHILD extension
+    class PROCESS,HANDSHAKE,READER,CALL external
+    class MCP_RISK,SUB_RISK note
+    class INIT_FAIL,CHILD_FAIL error
+
+    style MCP_LANE fill:#F5FAFF,stroke:#2855B5,stroke-width:2px,color:#102A5C
+    style MCP_PROCESS fill:#F7F8FA,stroke:#53606F,stroke-width:3px,color:#202833
+    style SUB_LANE fill:#FAF7FF,stroke:#7040A8,stroke-width:2px,color:#32184F
 ```
 
 - [ ] **Step 2: Validate and render**
 
 ```bash
 mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents.svg -b white
+mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents-2x.png -b white -s 2
+mmdc -i docs/diagrams/mmd/09-mcp-and-subagents.mmd -o /tmp/09-mcp-and-subagents-800.png -b white -s 1
 ```
 
-Expected: exit code 0; MCP and sub-agent boundaries share the central Runtime but remain visually distinct; both risk notes are legible.
+Expected: all commands exit 0; SVG includes `accTitle` / `accDescr` ARIA metadata and has an intrinsic width no greater than about 1100 px. The main-process `McpManager` and the external MCP OS subprocess boundary remain distinct; only the stdout reader and its response delivery use dashed asynchronous edges. Confirm the valid config override order, one-shot first-main-chat lazy load, no automatic retry after failed initialization, per-server partial failure, `disconnect_all` lifecycle, definition naming, `tools/call` result and backend-dependent error handling. The sub-agent half must distinguish `agent` tool configuration from Skill fork selection; show same-process but isolated prompt/messages/loop state, parent-plan versus bypass permission initialization, awaited sequential execution, successful token accounting, exception token gap, disabled main-agent lifecycle, empty-tools fallback, MCP-definition-without-connection risk and incomplete model-client configuration inheritance. Inspect SVG, 2x PNG and 800px PNG for clipping, overlap, edge-label collisions, edges crossing nodes and readable body text. Verify the Mermaid block in this Task 9 section is byte-for-byte identical to `docs/diagrams/mmd/09-mcp-and-subagents.mmd`, then run `git diff --check`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/diagrams/mmd/09-mcp-and-subagents.mmd
+git add docs/diagrams/mmd/09-mcp-and-subagents.mmd docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md docs/superpowers/plans/2026-08-20-skevo-mermaid-diagram-suite.md
 git commit -m "docs: add MCP and sub-agent boundaries diagram"
 ```
 
