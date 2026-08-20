@@ -1119,7 +1119,7 @@ config:
 %% Sources: agents/online_skill_eval.py, agents/skill_evolution.py, agents/main.py, agents/agent.py
 %% Anchors: _lineage_id_for_skill, _build_replay_pool, _assign_replay_splits, _compile_eval_rules, _build_candidate_eval_bundle_async, _skill_status, _promotion_decision, _persist_eval_artifacts, _set_champion, format_online_skill_eval_async
 %% Verified: 2026-08-20 against the current Python implementation.
-%% Symbols: 👤 entry；💾 persistent state；◇ model side query；⚙ evaluation；✓ promoted；❌ rejected；⚠ failure boundary。
+%% Symbols: 👤 entry；💾 persistent state；◇ model side query；⚙ evaluation；★ promoted；❌ rejected；⚠ failure boundary。
 %% Out of scope: 在线候选提取与 add / merge、Skill 运行时调用、usage judgment 如何产生。
 
 flowchart TB
@@ -1156,7 +1156,7 @@ flowchart TB
         RULES["编译最多 8 条规则<br/>始终含 hard non-empty；再按 Skill 文本加入<br/>引用 / 段数 / JSON 等 programmatic rules<br/>有 side_query 才加入 LLM binary rules"]
         CURRENT["⚙ current_active 基线<br/>在全部 replay 的历史 latest assistant 上判定<br/>LLM judge 异常按 fail 记录"]
         STATUS{"lifecycle gate<br/>默认值；Python API 可覆盖<br/>replay ≥ 2，test ≥ 1，retrieved ≥ 5<br/>pass ≥ .80，relevance ≥ .35，used ≥ .20"}
-        STATUS_MAP["固定判定顺序<br/>pruned → unobserved → incubating<br/>→ watch → healthy<br/>先命中即返回"]
+        STATUS_MAP["固定判定顺序<br/>pruned → unobserved → incubating<br/>数量 gate 通过后：test hard failures &gt; 0<br/>或任一 hard failure &gt; 0，或 pass / relevance / used<br/>未达阈值 → watch；否则 healthy"]
 
         SKILL_SET --> RULES
         SPLIT --> CURRENT
@@ -1175,7 +1175,7 @@ flowchart TB
         TEST["⚙ 仅对 dev winner<br/>在 promotion_test 重新生成与评估"]
         BUNDLE["输出 candidate_bundle<br/>best_dev_summary 始终来自 dev<br/>best_test_summary 仅在有 test 时存在<br/>此阶段尚未选择 promotion candidate"]
 
-        CURRENT --> SIDE_GATE
+        STATUS_MAP --> SIDE_GATE
         SIDE_GATE -->|否| EMPTY_BUNDLE
         SIDE_GATE -->|是| VARIANTS --> DEV --> WINNER
         WINNER -->|否| EMPTY_BUNDLE
@@ -1197,7 +1197,7 @@ flowchart TB
         HAS_CHAMPION{"healthy 且已有<br/>Champion summary?"}
         BEAT{"candidate score ≥ Champion + .01<br/>且 hard failures 不增加?"}
         REJECT["❌ rejected"]
-        PROMOTE["✓ active_champion"]
+        PROMOTE["★ active_champion"]
         CHAMPION_FILES["💾 仅晋升时按序写成功<br/>champions.json registry → champion.json<br/>→ 独立 champion SKILL.md<br/>不会覆盖 active Skill"]
         RUN_SUMMARY["💾 所有 status 均写成功<br/>run summary.json"]
         REPORT_GATE{"write_report?"}
@@ -1205,7 +1205,6 @@ flowchart TB
         RETURN["返回 report / 格式化终端输出"]
         WRITE_FAILURE(["⚠ 写入异常向上抛出<br/>写入非事务且无统一保护<br/>可能留下部分产物"])
 
-        STATUS_MAP --> PERSIST
         EMPTY_BUNDLE --> PERSIST
         BUNDLE --> PERSIST
         PERSIST -->|否| NO_ARTIFACTS --> REPORT_GATE
@@ -1215,8 +1214,7 @@ flowchart TB
         DEV_PRE -->|是：winner / test| CANDIDATE
         CANDIDATE --> LOAD_CHAMPION
         LOAD_CHAMPION --> CHAMP_GATE
-        CHAMP_GATE -->|unobserved / incubating / pruned| NON_HEALTHY
-        CHAMP_GATE -->|watch| NON_HEALTHY
+        CHAMP_GATE -->|非 healthy| NON_HEALTHY
         NON_HEALTHY --> RUN_SUMMARY
         CHAMP_GATE -->|healthy| HAS_CHAMPION
         HAS_CHAMPION -->|否：首个 healthy，不比分| PROMOTE
@@ -1269,13 +1267,13 @@ mmdc -i docs/diagrams/mmd/08-skill-evaluation.mmd -o /tmp/08-skill-evaluation.sv
 mmdc -i docs/diagrams/mmd/08-skill-evaluation.mmd -o /tmp/08-skill-evaluation-800@2x.png -b white -w 800 -s 2
 ```
 
-Expected: both commands exit 0; SVG includes `accTitle`/`accDescr` ARIA metadata and has an intrinsic width no greater than about 1050 px. Confirm exactly five business stages are visible; `mutate_dev` selects the only winner before independent `promotion_test`; the dev pre-gate and promotion-candidate selection occur only after `write_artifacts=true`; lifecycle and Champion gates remain distinct; default/API-overridable thresholds are legible; `unobserved`/`incubating`/`pruned` retain their status while `watch` becomes `rejected`; frozen dataset, run artifacts, Champion files, run summary and report each have a solid failure edge to the shared exception terminal. Inspect the SVG and 2x/800 PNG for clipping, overlap, edge crossings through nodes and readable body text. Verify the Mermaid block in this Task 8 section is byte-for-byte identical to `docs/diagrams/mmd/08-skill-evaluation.mmd`, then run `git diff --check`.
+Expected: both commands exit 0; SVG includes `accTitle`/`accDescr` ARIA metadata and has an intrinsic width no greater than about 1050 px. Confirm exactly five business stages are visible and the main chain is strictly `RULES → CURRENT → STATUS → STATUS_MAP → SIDE_GATE → EMPTY_BUNDLE/BUNDLE → PERSIST`, with no direct current-to-variants or status-to-persist shortcut; `mutate_dev` selects the only winner before independent `promotion_test`; the dev pre-gate and promotion-candidate selection occur only after `write_artifacts=true`; lifecycle and Champion gates remain distinct; default/API-overridable thresholds and the hard-failure-to-watch rule are legible; the single non-healthy Champion branch maps `unobserved`/`incubating`/`pruned` to their original status and `watch` to `rejected`; frozen dataset, run artifacts, Champion files, run summary and report each have a solid failure edge to the shared exception terminal. Inspect the SVG and 2x/800 PNG for clipping, overlap, edge crossings through nodes and readable body text. Verify the Mermaid block in this Task 8 section is byte-for-byte identical to `docs/diagrams/mmd/08-skill-evaluation.mmd`, then run `git diff --check`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add docs/diagrams/mmd/08-skill-evaluation.mmd docs/superpowers/specs/2026-08-20-skevo-mermaid-diagram-suite-design.md docs/superpowers/plans/2026-08-20-skevo-mermaid-diagram-suite.md
-git commit -m "docs: clarify Skill evaluation inputs"
+git commit -m "docs: correct Skill evaluation gate order"
 ```
 
 ### Task 9: Create the MCP and sub-agent boundaries diagram
