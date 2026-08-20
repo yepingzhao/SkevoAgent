@@ -1,0 +1,66 @@
+---
+title: Agent Loop：一次请求的完整生命周期
+config:
+  theme: base
+  look: classic
+---
+%% Purpose: 按真实顺序展示一次用户请求从 CLI 到模型、工具、Session 和后台任务的生命周期。
+%% Audience: both
+%% Sources: agents/main.py, agents/agent.py
+%% Anchors: run_repl, run_one_shot, Agent.chat, Agent._chat_openai, Agent._chat_anthropic, Agent._check_budget
+%% Out of scope: 权限决策细节、具体工具实现、Skill 演化内部判断。
+
+sequenceDiagram
+    autonumber
+    actor User as 👤 用户
+    participant CLI as ⌨ CLI / REPL
+    participant Runtime as ⚙ Agent Runtime
+    participant Skills as ★ Skills
+    participant Memory as ◆ Memory
+    participant Model as ◇ 模型后端
+    participant Tools as 🔐 工具运行时
+    participant State as 💾 Session / 后台任务
+
+    User->>CLI: 输入任务
+    CLI->>Runtime: Agent.chat(user_message)
+    opt 主 Agent 首次 chat
+        Runtime->>Runtime: 懒加载 MCP 工具定义
+        Note right of Runtime: MCP 失败只记录错误，不阻断对话
+    end
+    Runtime->>Runtime: 消费上一轮 pending extraction window
+    Runtime->>Skills: BM25 检索相关 Skill 摘要
+    Skills-->>Runtime: top 3 metadata / 无命中
+
+    alt OpenAI-compatible
+        Runtime->>Memory: 启动异步预取
+    else Anthropic-compatible
+        Runtime->>Memory: 启动异步预取
+    end
+
+    loop 文本或 tool call 驱动的 Agent Loop
+        Runtime->>Runtime: compression pipeline
+        opt Memory 已返回且尚未消费
+            Memory-->>Runtime: 非阻断注入相关长期记忆
+        end
+        Runtime->>Model: 流式模型调用（可重试错误指数退避）
+        Model-->>Runtime: text + tool calls
+        alt 无 tool call
+            Runtime-->>CLI: 最终文本
+        else 达到 max_turns / max_cost_usd
+            Runtime->>Runtime: 跳过工具并记录预算原因
+        else 有 tool call 且预算允许
+            Runtime->>Tools: 权限检查与执行
+            Tools-->>Runtime: tool result / denied / error
+            Runtime->>Model: 回写 tool result 并继续推理
+            Runtime->>Runtime: 工具批次后检查自动 compaction
+        end
+        opt abort 或 context break
+            Runtime->>Runtime: 终止相应循环
+        end
+    end
+
+    Runtime->>State: 自动保存 Session
+    Runtime--)State: Skill usage tracking
+    Runtime--)State: 已成熟窗口的 online evolution
+    Runtime->>State: 保存当前轮为下一 pending window
+    CLI-->>User: 输出完成
