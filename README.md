@@ -18,7 +18,7 @@ Skevo Agent 是一个基于 Python 实现的 **自进化 Harness Agent**。它�
 
 ## 项目架构
 
-![Skevo Agent 总体架构](wiki/assets/architecture/01-overall-architecture.svg)
+![Skevo Agent 系统架构](docs/diagrams/svg/01-system-architecture.svg)
 
 核心运行链路：
 
